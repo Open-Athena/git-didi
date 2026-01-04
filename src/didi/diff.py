@@ -1,5 +1,5 @@
 import sys
-from subprocess import run
+from subprocess import PIPE, Popen, run
 from typing import Dict
 
 from utz import err
@@ -159,3 +159,245 @@ def compute_upstream_range(refspec1: str, refspec2: str) -> str:
     if base1 and base2:
         return f'{base1}..{base2}'
     return ''
+
+
+def get_orig_head() -> str:
+    """Get ORIG_HEAD (original branch tip before rebase)."""
+    git_dir = run(['git', 'rev-parse', '--git-dir'], capture_output=True, text=True)
+    if git_dir.returncode != 0:
+        err("Not in a git repository")
+        sys.exit(1)
+    git_dir = git_dir.stdout.strip()
+
+    # Check various locations for orig-head
+    for path in [
+        f'{git_dir}/ORIG_HEAD',
+        f'{git_dir}/rebase-apply/orig-head',
+        f'{git_dir}/rebase-merge/orig-head',
+    ]:
+        try:
+            with open(path) as f:
+                return f.read().strip()
+        except FileNotFoundError:
+            continue
+
+    err("Could not find ORIG_HEAD (not in/after a rebase?)")
+    sys.exit(1)
+
+
+def get_onto() -> str:
+    """Get onto commit (what we rebased onto).
+
+    During rebase: reads from .git/rebase-merge/onto
+    After rebase: parses reflog for most recent 'rebase (start)' entry
+    """
+    git_dir = run(['git', 'rev-parse', '--git-dir'], capture_output=True, text=True)
+    if git_dir.returncode != 0:
+        err("Not in a git repository")
+        sys.exit(1)
+    git_dir = git_dir.stdout.strip()
+
+    # During active rebase
+    onto_path = f'{git_dir}/rebase-merge/onto'
+    try:
+        with open(onto_path) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+
+    # Post-rebase: check reflog
+    reflog = run(
+        ['git', 'reflog', '--format=%H %gs'],
+        capture_output=True, text=True,
+    )
+    if reflog.returncode == 0:
+        for line in reflog.stdout.splitlines():
+            if 'rebase (start)' in line:
+                return line.split()[0]
+
+    err("Could not find onto (not in/after a rebase?)")
+    sys.exit(1)
+
+
+def get_rebase_head() -> str:
+    """Get REBASE_HEAD (commit currently being replayed, mid-rebase only)."""
+    git_dir = run(['git', 'rev-parse', '--git-dir'], capture_output=True, text=True)
+    if git_dir.returncode != 0:
+        err("Not in a git repository")
+        sys.exit(1)
+    git_dir = git_dir.stdout.strip()
+
+    rebase_head = f'{git_dir}/REBASE_HEAD'
+    try:
+        with open(rebase_head) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        pass
+
+    err("No REBASE_HEAD (not mid-rebase?)")
+    sys.exit(1)
+
+
+def get_rebase_merge_base() -> str:
+    """Get merge-base of orig_head and onto."""
+    oh = get_orig_head()
+    ot = get_onto()
+    result = run(['git', 'merge-base', oh, ot], capture_output=True, text=True)
+    if result.returncode != 0:
+        err(f"Could not compute merge-base of {oh} and {ot}")
+        sys.exit(1)
+    return result.stdout.strip()
+
+
+# Sentinel refspec names and their expansions
+REFSPEC_SENTINELS = {'mboh', 'mbot', 'mbrhp', 'mbrp', 'oth'}
+
+
+def expand_refspec(refspec: str) -> str:
+    """Expand sentinel refspecs like 'mboh', 'oth' to actual git ranges.
+
+    Sentinels:
+        mboh  = merge-base..orig-head (original feature commits)
+        mbot  = merge-base..onto (upstream commits since diverge)
+        mbrhp = merge-base..rebase-head^ (original commits processed so far)
+        oth   = onto..HEAD (rebased commits)
+    """
+    if refspec == 'mboh':
+        mb = get_rebase_merge_base()
+        oh = get_orig_head()
+        return f'{mb}..{oh}'
+    elif refspec == 'mbot':
+        mb = get_rebase_merge_base()
+        ot = get_onto()
+        return f'{mb}..{ot}'
+    elif refspec in ('mbrhp', 'mbrp'):
+        mb = get_rebase_merge_base()
+        rh = get_rebase_head()
+        return f'{mb}..{rh}^'
+    elif refspec == 'oth':
+        ot = get_onto()
+        return f'{ot}..HEAD'
+    else:
+        return refspec
+
+
+def get_rebase_refspecs() -> tuple[str, str]:
+    """Get refspecs for post-rebase verification: mboh vs oth.
+
+    Returns:
+        (mboh, oth) - original commits vs rebased commits
+    """
+    return expand_refspec('mboh'), expand_refspec('oth')
+
+
+def parse_paths(paths: tuple[str, ...]) -> list[str]:
+    """Parse path arguments, expanding @file and stdin references.
+
+    Supports:
+    - Direct paths: 'file.txt'
+    - Read from file: '@paths.txt'
+    - Read from stdin: '-' or '@-'
+
+    Returns list of paths.
+    """
+    result = []
+    for path in paths:
+        if path == '-' or path == '@-':
+            # Read paths from stdin
+            for line in sys.stdin:
+                line = line.strip()
+                if line:
+                    result.append(line)
+        elif path.startswith('@'):
+            # Read paths from file
+            filepath = path[1:]
+            try:
+                with open(filepath) as f:
+                    for line in f:
+                        line = line.strip()
+                        if line:
+                            result.append(line)
+            except FileNotFoundError:
+                err(f"Path file not found: {filepath}")
+                sys.exit(1)
+        else:
+            result.append(path)
+    return result
+
+
+def parse_refspec_endpoints(refspec: str) -> tuple[str, str]:
+    """Parse a refspec into start and end points.
+
+    'A..B' -> ('A', 'B')
+    'A' -> ('A^', 'A')
+    """
+    if '..' in refspec:
+        start, end = refspec.split('..', 1)
+    else:
+        start, end = f'{refspec}^', refspec
+    return start, end
+
+
+def run_pipeline(cmds: list[str]) -> str:
+    """Run a sequence of shell commands piped together, return stdout.
+
+    Args:
+        cmds: List of shell commands to pipe together
+
+    Returns:
+        stdout output as string
+    """
+    if not cmds:
+        return ''
+
+    # Build the pipeline: cmd1 | cmd2 | cmd3 ...
+    pipeline_str = ' | '.join(cmds)
+    result = run(pipeline_str, shell=True, capture_output=True, text=True)
+
+    if result.returncode != 0 and result.stderr:
+        err(f"Pipeline failed: {result.stderr.strip()}")
+
+    return result.stdout
+
+
+def get_file_diff_with_pipeline(
+    refspec: str,
+    filepath: str,
+    pipeline_cmds: list[str],
+    ignore_whitespace: bool = False,
+    unified: int = 3,
+) -> str:
+    """Get diff for a file, running content through pipeline first.
+
+    For a refspec like A..B and pipeline ['pqa'], this:
+    1. Gets file content at A, runs through pipeline
+    2. Gets file content at B, runs through pipeline
+    3. Diffs the two pipeline outputs
+
+    Returns the diff output as a string.
+    """
+    start, end = parse_refspec_endpoints(refspec)
+
+    # Build pipeline commands for each side
+    # First command gets file content from git
+    cmd_start = f'git show {start}:{filepath}'
+    cmd_end = f'git show {end}:{filepath}'
+
+    cmds1 = [cmd_start, *pipeline_cmds]
+    cmds2 = [cmd_end, *pipeline_cmds]
+
+    # Run both pipelines and capture output
+    output1 = run_pipeline(cmds1)
+    output2 = run_pipeline(cmds2)
+
+    # Use difflib to generate unified diff
+    import difflib
+    diff_lines = list(difflib.unified_diff(
+        output1.splitlines(keepends=True),
+        output2.splitlines(keepends=True),
+        fromfile=f'a/{filepath}',
+        tofile=f'b/{filepath}',
+        n=unified,
+    ))
+
+    return ''.join(diff_lines)

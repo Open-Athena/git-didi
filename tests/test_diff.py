@@ -1,10 +1,18 @@
 """Test diff utilities."""
 
+import os
+import tempfile
+
 from didi.diff import (
     build_diff_cmd,
     compute_upstream_range,
+    expand_refspec,
     normalize_diff,
+    parse_paths,
     parse_refspec_bases,
+    parse_refspec_endpoints,
+    run_pipeline,
+    REFSPEC_SENTINELS,
 )
 
 
@@ -104,3 +112,93 @@ def test_compute_upstream_range_invalid():
     """Test computing upstream range with invalid refspecs."""
     upstream = compute_upstream_range('main', 'feature')
     assert upstream == ''
+
+
+# Tests for parse_refspec_endpoints
+
+
+def test_parse_refspec_endpoints_range():
+    """Test parsing refspec with .. notation."""
+    start, end = parse_refspec_endpoints('A..B')
+    assert start == 'A'
+    assert end == 'B'
+
+
+def test_parse_refspec_endpoints_single():
+    """Test parsing single commit refspec."""
+    start, end = parse_refspec_endpoints('HEAD')
+    assert start == 'HEAD^'
+    assert end == 'HEAD'
+
+
+# Tests for parse_paths
+
+
+def test_parse_paths_direct():
+    """Test parsing direct path arguments."""
+    paths = parse_paths(('file1.txt', 'file2.txt'))
+    assert paths == ['file1.txt', 'file2.txt']
+
+
+def test_parse_paths_from_file():
+    """Test parsing paths from @file."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write('path1.txt\npath2.txt\n  path3.txt  \n')
+        f.flush()
+        try:
+            paths = parse_paths((f'@{f.name}',))
+            assert paths == ['path1.txt', 'path2.txt', 'path3.txt']
+        finally:
+            os.unlink(f.name)
+
+
+def test_parse_paths_mixed():
+    """Test parsing mixed direct paths and @file."""
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write('from_file.txt\n')
+        f.flush()
+        try:
+            paths = parse_paths(('direct.txt', f'@{f.name}'))
+            assert paths == ['direct.txt', 'from_file.txt']
+        finally:
+            os.unlink(f.name)
+
+
+# Tests for run_pipeline
+
+
+def test_run_pipeline_single_command():
+    """Test running a single command."""
+    output = run_pipeline(['echo hello'])
+    assert output.strip() == 'hello'
+
+
+def test_run_pipeline_multi_stage():
+    """Test running multiple piped commands."""
+    output = run_pipeline(['echo "b\na\nc"', 'sort'])
+    assert output.strip() == 'a\nb\nc'
+
+
+def test_run_pipeline_empty():
+    """Test running empty pipeline."""
+    output = run_pipeline([])
+    assert output == ''
+
+
+# Tests for expand_refspec
+
+
+def test_expand_refspec_passthrough():
+    """Test that non-sentinel refspecs pass through unchanged."""
+    assert expand_refspec('HEAD~5..HEAD') == 'HEAD~5..HEAD'
+    assert expand_refspec('main..feature') == 'main..feature'
+    assert expand_refspec('abc123') == 'abc123'
+
+
+def test_refspec_sentinels_defined():
+    """Test that expected sentinels are defined."""
+    assert 'mboh' in REFSPEC_SENTINELS
+    assert 'mbot' in REFSPEC_SENTINELS
+    assert 'mbrhp' in REFSPEC_SENTINELS
+    assert 'mbrp' in REFSPEC_SENTINELS  # alias for mbrhp
+    assert 'oth' in REFSPEC_SENTINELS

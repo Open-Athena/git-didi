@@ -52,11 +52,15 @@ from .color import should_use_color
 from .diff import (
     build_diff_cmd,
     compute_upstream_range,
+    expand_refspec,
     get_changed_files,
     get_commits,
     get_file_diff,
+    get_file_diff_with_pipeline,
+    get_rebase_refspecs,
     get_rename_mapping,
     normalize_diff,
+    parse_paths,
 )
 from .pager import Pager
 
@@ -95,24 +99,43 @@ shell_integration_module.register(cli)
 
 @cli.command()
 @common_opts
-@arg('refspec1')
-@arg('refspec2')
-@arg('paths', nargs=-1)
+@flag('-r', '--rebase', help='Rebase mode: auto-detect refspecs (mboh oth)')
+@arg('args', nargs=-1)
 def stat(
     color: str,
     pager: str,
     find_copies: str,
     find_renames: str,
     ignore_whitespace: bool,
-    refspec1: str,
-    refspec2: str,
-    paths: tuple[str, ...],
+    rebase: bool,
+    args: tuple[str, ...],
 ) -> None:
     """Compare git diff --stat output between two refspecs.
 
-    Example: git-didi stat rmb..m/rw/ee m/main..ee
-    Optionally filter to specific paths.
+    \b
+    Standard mode:
+        git-didi stat REFSPEC1 REFSPEC2 [PATHS...]
+
+    \b
+    Rebase mode (-r, shorthand for "mboh oth"):
+        git-didi stat -r [PATHS...]
+
+    \b
+    Sentinel refspecs (expanded automatically):
+        mboh, mbot, mbrhp/mbrp, oth (see "patch --help" for details)
     """
+    # Parse refspecs based on mode
+    if rebase:
+        refspec1, refspec2 = get_rebase_refspecs()
+        paths = args
+    else:
+        if len(args) < 2:
+            err("Expected two refspecs (or use -r for rebase mode)")
+            sys.exit(1)
+        refspec1 = expand_refspec(args[0])
+        refspec2 = expand_refspec(args[1])
+        paths = args[2:]
+
     use_color = should_use_color(color)
 
     with Pager(pager):
@@ -201,32 +224,142 @@ def stat(
 
 @cli.command()
 @common_opts
+@opt('-p', '--path', multiple=True, help='Paths to compare (enables pipeline mode; supports @file and - for stdin)')
+@flag('-r', '--rebase', help='Rebase mode: auto-detect refspecs via git ours-refspec/theirs-refspec')
 @opt('-U', '--unified', type=int, default=3, help='Number of context lines to show (default: 3)')
 @flag('-q', '--quiet', help='Only show files with differences')
-@arg('refspec1')
-@arg('refspec2')
-@arg('paths', nargs=-1)
+@arg('args', nargs=-1)
 def patch(
     color: str,
     pager: str,
     find_copies: str,
     find_renames: str,
+    path: tuple[str, ...],
+    rebase: bool,
     unified: int,
     quiet: bool,
     ignore_whitespace: bool,
-    refspec1: str,
-    refspec2: str,
-    paths: tuple[str, ...],
+    args: tuple[str, ...],
 ) -> None:
     """Compare patches file-by-file between two refspecs.
 
-    Shows only files where the patches differ.
-    Optionally filter to specific paths.
+    \b
+    Standard mode (refspecs as first two args):
+        git-didi patch REFSPEC1 REFSPEC2 [PATHS...]
+
+    \b
+    Pipeline mode (with -p):
+        git-didi patch REFSPEC1 REFSPEC2 PIPELINE_CMD... -p PATH [-p PATH...]
+
+    \b
+    Rebase mode (-r, shorthand for "mboh oth"):
+        git-didi patch -r [PATHS...]
+        git-didi patch -r PIPELINE_CMD... -p PATH [-p PATH...]
+
+    \b
+    Sentinel refspecs (expanded automatically):
+        mboh       = merge-base..orig-head (original feature commits)
+        mbot       = merge-base..onto (upstream commits since diverge)
+        mbrhp/mbrp = merge-base..rebase-head^ (mid-rebase: processed so far)
+        oth        = onto..HEAD (rebased commits)
+
+    \b
+    Examples with sentinels:
+        git-didi patch mboh oth              # post-rebase verify
+        git-didi patch mboh mbot             # feature vs upstream
+        git-didi patch mbrhp oth             # mid-rebase progress
+        git-didi patch mboh oth pqa -p data.parquet  # with pipeline
     """
+    # Parse refspecs based on mode
+    if rebase:
+        # Rebase mode: shorthand for mboh oth
+        refspec1, refspec2 = get_rebase_refspecs()
+        remaining_args = args
+    else:
+        # Standard mode: first two args are refspecs
+        if len(args) < 2:
+            err("Expected two refspecs (or use -r for rebase mode)")
+            sys.exit(1)
+        # Expand sentinel refspecs
+        refspec1 = expand_refspec(args[0])
+        refspec2 = expand_refspec(args[1])
+        remaining_args = args[2:]
+
+    # Determine mode: pipeline vs backward-compatible
+    if path:
+        # Pipeline mode: remaining args are pipeline commands, paths from -p option
+        pipeline_cmds = list(remaining_args)
+        paths = tuple(parse_paths(path))
+        if not pipeline_cmds:
+            err("Pipeline mode requires at least one pipeline command")
+            sys.exit(1)
+    else:
+        # Backward compatible: remaining args are paths, no pipeline
+        pipeline_cmds = []
+        paths = remaining_args
+
     # Determine color BEFORE pager redirects stdout
     use_color = should_use_color(color)
 
     with Pager(pager):
+        # Pipeline mode: compare pipeline-processed diffs
+        if pipeline_cmds:
+            different_files = []
+            for filepath in paths:
+                diff1 = get_file_diff_with_pipeline(
+                    refspec1, filepath, pipeline_cmds,
+                    ignore_whitespace=ignore_whitespace,
+                    unified=unified,
+                )
+                diff2 = get_file_diff_with_pipeline(
+                    refspec2, filepath, pipeline_cmds,
+                    ignore_whitespace=ignore_whitespace,
+                    unified=unified,
+                )
+
+                if diff1 != diff2:
+                    different_files.append(filepath)
+                    if not quiet:
+                        echo(style(f"\n{'='*60}", fg='blue') if use_color else f"\n{'='*60}")
+                        echo(style(f"File: {filepath}", fg='yellow', bold=True) if use_color else f"File: {filepath}")
+                        echo(style(f"{'='*60}", fg='blue') if use_color else f"{'='*60}")
+
+                        # Show the diff of diffs for this file
+                        from_label = f'{filepath} in {refspec1}'
+                        to_label = f'{filepath} in {refspec2}'
+                        diff_lines = list(difflib.unified_diff(
+                            diff1.splitlines(),
+                            diff2.splitlines(),
+                            fromfile=from_label,
+                            tofile=to_label,
+                            lineterm=''
+                        ))
+
+                        for line in diff_lines:
+                            if use_color:
+                                if line.startswith('+') and not line.startswith('+++'):
+                                    echo(style(line, fg='green'), color=True)
+                                elif line.startswith('-') and not line.startswith('---'):
+                                    echo(style(line, fg='red'), color=True)
+                                elif line.startswith('@@'):
+                                    echo(style(line, fg='cyan'), color=True)
+                                else:
+                                    echo(line)
+                            else:
+                                echo(line)
+
+            if quiet and different_files:
+                echo(style("\nFiles with different patches:", fg='yellow', bold=True) if use_color else "\nFiles with different patches:")
+                for f in different_files:
+                    echo(f"  {f}")
+
+            if not different_files:
+                err("No differences in patches")
+            else:
+                err(f"\n{len(different_files)} file(s) have different patches")
+            return
+
+        # Non-pipeline mode: original behavior
         # Compute upstream range to detect renames
         # E.g., if comparing A..B vs C..D, look at A..C for upstream changes
         upstream_range = compute_upstream_range(refspec1, refspec2)
@@ -473,8 +606,8 @@ def swatches(color: str) -> None:
 @cli.command()
 @common_opts
 @opt('-U', '--unified', type=int, default=3, help='Number of context lines to show (default: 3)')
-@arg('refspec1')
-@arg('refspec2')
+@flag('-r', '--rebase', help='Rebase mode: auto-detect refspecs (mboh oth)')
+@arg('args', nargs=-1)
 def commits(
     color: str,
     pager: str,
@@ -482,14 +615,36 @@ def commits(
     find_renames: str,
     unified: int,
     ignore_whitespace: bool,
-    refspec1: str,
-    refspec2: str,
+    rebase: bool,
+    args: tuple[str, ...],
 ) -> None:
     """Compare commits between two refspecs.
 
     First verifies that commits correspond (same count and messages),
     then shows per-commit differences.
+
+    \b
+    Standard mode:
+        git-didi commits REFSPEC1 REFSPEC2
+
+    \b
+    Rebase mode (-r, shorthand for "mboh oth"):
+        git-didi commits -r
+
+    \b
+    Sentinel refspecs (expanded automatically):
+        mboh, mbot, mbrhp/mbrp, oth (see "patch --help" for details)
     """
+    # Parse refspecs based on mode
+    if rebase:
+        refspec1, refspec2 = get_rebase_refspecs()
+    else:
+        if len(args) < 2:
+            err("Expected two refspecs (or use -r for rebase mode)")
+            sys.exit(1)
+        refspec1 = expand_refspec(args[0])
+        refspec2 = expand_refspec(args[1])
+
     use_color = should_use_color(color)
 
     with Pager(pager):

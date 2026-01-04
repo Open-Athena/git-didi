@@ -37,7 +37,7 @@ wheels = [
 
 [[package]]
 name = "git-didi"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "click" },
@@ -180,12 +180,12 @@ wheels = [
 
 [[package]]
 name = "utz"
-version = "0.21.2"
+version = "0.21.5"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "stdlb" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ba/11/0299d2719dd18e50d0fa5feb2a4b47c3b18f4396a1e54c4063032938ecdd/utz-0.21.2.tar.gz", hash = "sha256:7647fa5bd311ce924f2e6391856d9c869f7a3bd8d7104c91933cf0eba237336e", size = 101274, upload-time = "2025-11-03T02:25:58.114Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/59/b3/732aed08fcc33f11146e41c3d23afd20f36f3766d2c0ae5a8aff54cb09c4/utz-0.21.5.tar.gz", hash = "sha256:6e31cca8c463c6d14e8662da8aeee4dc97a52932c680cca3db56dea1d1297e85", size = 107978, upload-time = "2025-12-20T01:56:08.144Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/d3/09/f1216df16b1623c55e7941e21fad43c1ff958436b70deb753e89e7ef4268/utz-0.21.2-py3-none-any.whl", hash = "sha256:9833c41870aea37bbb88ed2739531115d5f35434e327b7b916a133e8549969dc", size = 85975, upload-time = "2025-11-03T02:25:56.685Z" },
+    { url = "https://files.pythonhosted.org/packages/74/54/73436a3e12b20e951afd73c74cb10de63a155954e1bb9fc0eecc9dd0a334/utz-0.21.5-py3-none-any.whl", hash = "sha256:f6790bf16b891ead028b4d60ef2c80268399d197e2e96c6fa034b9cfdc2fd38e", size = 90964, upload-time = "2025-12-20T01:56:06.588Z" },
 ]
