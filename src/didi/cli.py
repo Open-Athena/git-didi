@@ -44,10 +44,11 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from subprocess import run
 
-from click import Choice, echo, group, style
+from click import Choice, echo, group, option, style
 from utz import err
 from utz.cli import arg, flag, opt
 
+from ._version import get_version_info
 from .color import should_use_color
 from .diff import (
     build_diff_cmd,
@@ -83,7 +84,16 @@ def common_opts(func):
     return func
 
 
+def print_version(ctx, param, value):
+    """Print version and exit."""
+    if not value or ctx.resilient_parsing:
+        return
+    echo(get_version_info())
+    ctx.exit()
+
+
 @group()
+@option('-V', '--version', is_flag=True, callback=print_version, expose_value=False, is_eager=True, help='Show version and exit')
 def cli():
     """Compare git diffs between two ranges.
 
