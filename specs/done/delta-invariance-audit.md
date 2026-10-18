@@ -80,6 +80,6 @@ Code: `src/didi/normalize.py` (splitting, levels), `src/didi/compare.py` (batche
 
 - `picks -s 2026-09-28 cloud gcs cw hf r2 m3 local tauri-native-app`: 403 picks, 277 equal, 52 equal@lines, 30 equal@context, 1 equal@ws, 13 equal@tokens, 18 differs, 12 files-differ (draft's hand count: 405 / 277 / 54 / 30 / 31 content / 13 file-set).
 - `merge a96bd9b3`: 235 equal, `cli.py` equal@lines, `Treemap.tsx` equal@tokens. `merge 41c980dd`: 4 absorbed picks, 10 of 11 residual files absorbed; the remaining `Dockerfile` really differs (the merge dropped `--extra plot` from `uv sync`).
-- All 212 `cloud` → `gcs`/`cw*` first-parent merges since 2026-09-28 (~0.5s each): MERGE_RESULTS
+- All 212 `cloud` → `gcs`/`cw*` first-parent merges since 2026-09-28 (~0.5s each): at the default `-n index`, 84 flag; at `-n tokens`, 36 do, with 82 `differs` / 81 `left-only` / 64 `right-only` files left unexplained. Across all 212, 490 files classified `absorbed` and 93 `adopted`. The residue is the consumer ledger's job (intended per-branch deltas, plus genuine resolution changes like the `Dockerfile` above).
 
-[disky spec]: ../../disky/specs/branch-harmony-audit.md
+[disky spec]: ../../../disky/specs/branch-harmony-audit.md
