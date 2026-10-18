@@ -1,6 +1,6 @@
 # Normalized diff-of-diffs for long-lived branch audits
 
-**Status:** draft, 2026-10-17, from the disky branch-harmony analysis (`~/c/oa/disky-deep-dive/data/branch-similarity.json`, `scripts/branch_similarity.py`). Consumer: disky's `scripts/branch-audit` and the proposed [`branch-harmony-audit.md`][disky spec].
+**Status:** implemented 2026-10-17 (see [Implementation notes](#implementation-notes)); drafted 2026-10-17, from the disky branch-harmony analysis (`~/c/oa/disky-deep-dive/data/branch-similarity.json`, `scripts/branch_similarity.py`). Consumer: disky's `scripts/branch-audit` and the proposed [`branch-harmony-audit.md`][disky spec].
 
 ## Why
 
@@ -16,7 +16,7 @@ Today `git-didi patch` answers both only as "byte-identical or not", and real ca
 
 ## Bugs / gaps found while running it
 
-- `normalize_diff` (strips `index` SHAs) is imported in `cli.py` but never called on the `patch` path, so every differing file shows `-index …`/`+index …` noise, contrary to the README.
+- `normalize_diff` (strips `index` SHAs) was applied to the `patch` path's equality check, but the diff-of-diffs *display* used the raw patches, so every differing file showed `-index …`/`+index …` noise. (The draft said it was never called; it was, just not for display.)
 - `patch` and `stat` exit 0 whether or not patches differ; callers grep stderr for "No differences in patches". Exit 1 on difference, like `diff`.
 - One `git diff` subprocess per file per side. Fine at tens of files, slow at disky's ~250-file deltas; a single `git diff` per side, split on `diff --git`, would do.
 
@@ -60,5 +60,26 @@ A tree-sitter mode (`--normalize ast`) would generalize this: edits as AST opera
 
 - Deciding what the intrinsic delta *should* be; that is the consumer's ledger.
 - Rewriting history or resolving conflicts.
+
+
+## Implementation notes
+
+Code: `src/didi/normalize.py` (splitting, levels), `src/didi/compare.py` (batched git plumbing, classification, picks, delta/absorption), commands in `cli.py`. Tests: `tests/test_normalize.py`, `tests/test_audit.py` (fixture repo covering every pick/merge class).
+
+- **Bugs**: display now diffs `index`-normalized patches (raw only with `-n none`). `patch`, `stat`, `picks`, `merge`, `delta` exit 1 on differences, 2 on errors; usage errors in `patch`/`stat`/`commits` moved from 1 to 2 (BIC, `diff` convention). `patch` runs one `git diff` per side and splits on `diff --git` (paths from `rename to`/`+++`/`---`, falling back to the `diff --git` line for binary/mode-only changes; C-quoted paths unquoted). Output format is pinned against user config (`--src-prefix=a/ --dst-prefix=b/ --no-ext-diff --no-color`, `core.quotePath=false`).
+- **Levels**: `none index lines context ws tokens`. `-n` is the *threshold* (files equal at or below it count as equal, for display and exit status); every file is still classified by its first equal level, and the summary labels `none`/`index` as plain `equal`. `lines` is not exactly `git patch-id --stable` semantics: patch-id also ignores whitespace, so it sits between `lines` and `ws`.
+- **`tokens`** (feature 5, first cut): each run of `-`/`+` lines between context lines becomes a `difflib` opcode list over `\w+|[^\w\s]` tokens, rendered as `insert: …` / `delete: …` / `replace: … → …`, with no position anchor. The `Treemap.tsx` case classifies `equal@tokens`. AST mode not implemented.
+- **`--json`**: `patch` emits `{path, [left_path], status, level, left_lines, right_lines}`; `picks` adds per-pick `{commit, subject, source, class, level, ok, files}`; `merge`/`delta` emit `{label, before, after, absorbed_commits, ok, files}`, files carrying `residual_lines`/`absorbed_lines` when absorption was attempted.
+- **`picks [REVS]`**: `git log` args (default `HEAD`), `-s/--since`. Trailers found via one `git log --grep`; the *last* trailer is the immediate source; sources resolved with one `cat-file --batch-check`; all patches fetched with one `git log --no-walk --stdin -p --diff-merges=first-parent`. The patch-id fast path was dropped: computing patch-ids needs the same diffs, and batching made the whole run cheap (403 disky picks in 0.85s). `missing` picks are listed but don't fail the run.
+- **`delta`**: two forms, `delta CHILD PARENT --at A [--at B]` (`--at` is a reflog selector, `CHILD@{A}`; the second point defaults to current tips) and `delta CHILD_A PARENT_A CHILD_B PARENT_B`. `merge M...` takes merges or ranges (expanded to first-parent merges).
+- **Absorption**: candidates are commits that entered the base and weren't in the old child (`base_B ^tip_A`, i.e. `M^1..M^2` for a merge). A candidate is absorbed if its trailer names one of the child's own commits, an own commit's trailer names it (the child had picked it from the parent), or patch-ids match. Per file, residual lines the delta *lost* must appear (same sign) among the absorbed picks' changes; lines it *gained* must appear with flipped sign (e.g. own commits `x→y→z`, only `x→y` absorbed: the delta becomes `-y +z`).
+- **`adopted`** (new class, not in the draft): the parent often takes the child's content without a pick, e.g. disky `d8196490ec`, where one `cloud` commit took 24 of `gcs`'s spec files wholesale. Lost lines may also be explained by the base's net change `git diff base_A base_B`; such files are `adopted`. Gained lines are never explained that way, so a merge that drops a parent change still `differs`.
+- **Delta report**: per-merge `files +added/-removed` before → after, absorbed-pick count, class summary, non-equal files (with `N/M residual lines explained` for partial absorption), and the `git-didi patch` command reproducing the comparison.
+
+### Results on disky (2026-10-17)
+
+- `picks -s 2026-09-28 cloud gcs cw hf r2 m3 local tauri-native-app`: 403 picks, 277 equal, 52 equal@lines, 30 equal@context, 1 equal@ws, 13 equal@tokens, 18 differs, 12 files-differ (draft's hand count: 405 / 277 / 54 / 30 / 31 content / 13 file-set).
+- `merge a96bd9b3`: 235 equal, `cli.py` equal@lines, `Treemap.tsx` equal@tokens. `merge 41c980dd`: 4 absorbed picks, 10 of 11 residual files absorbed; the remaining `Dockerfile` really differs (the merge dropped `--extra plot` from `uv sync`).
+- All 212 `cloud` → `gcs`/`cw*` first-parent merges since 2026-09-28 (~0.5s each): MERGE_RESULTS
 
 [disky spec]: ../../disky/specs/branch-harmony-audit.md

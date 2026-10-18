@@ -40,8 +40,8 @@ that change even when the actual patch content is identical.
 """
 
 import difflib
+import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from subprocess import run
 
 from click import Choice, echo, group, option, style
@@ -50,6 +50,22 @@ from utz.cli import arg, flag, opt
 
 from ._version import get_version_info
 from .color import should_use_color
+from .compare import (
+    DeltaResult,
+    DiffOpts,
+    classify_picks,
+    compare_delta,
+    compare_patches,
+    display_lines,
+    expand_merges,
+    find_picks,
+    git,
+    merge_base,
+    merge_delta,
+    range_patches,
+    rev_parse,
+    summarize,
+)
 from .diff import (
     build_diff_cmd,
     compute_upstream_range,
@@ -63,6 +79,7 @@ from .diff import (
     normalize_diff,
     parse_paths,
 )
+from .normalize import DEFAULT_LEVEL, LEVELS
 from .pager import Pager
 
 
@@ -72,6 +89,8 @@ pager_opt = opt('--pager', type=Choice(['auto', 'always', 'never']), default='au
 find_copies_opt = opt('-C', '--find-copies', type=str, metavar='[<n>]', help='Detect copies as well as renames (similarity threshold, e.g., 50% or 0.5)')
 find_renames_opt = opt('-M', '--find-renames', type=str, metavar='[<n>]', help='Detect renames (similarity threshold, e.g., 50% or 0.5)')
 ignore_whitespace_flag = flag('-w', '--ignore-whitespace', help='Pass -w to git diff commands to ignore whitespace')
+json_flag = flag('-j', '--json', 'json_out', help='Print one JSON record per file (or commit), instead of diffs')
+normalize_opt = opt('-n', '--normalize', 'normalize_level', type=Choice(LEVELS), default=DEFAULT_LEVEL, help=f'Normalization level at which patches count as equal (cumulative: {", ".join(LEVELS)}; default: {DEFAULT_LEVEL})')
 
 
 def common_opts(func):
@@ -90,6 +109,99 @@ def print_version(ctx, param, value):
         return
     echo(get_version_info())
     ctx.exit()
+
+
+def echo_didi_line(line: str, use_color: bool) -> None:
+    """Print one line of a diff of diffs, coloring the outer and nested diff markers."""
+    if not use_color:
+        echo(line)
+        return
+
+    # Handle unified diff headers from outer diff first (---, +++, @@)
+    # These are lines from the outer diff, not nested patterns
+    if line.startswith('---') and not line.startswith('----'):
+        # Real outer diff header - red fg
+        echo(style(line, fg='red'), color=True)
+        return
+    elif line.startswith('+++') and not line.startswith('++++'):
+        # Real outer diff header - green fg
+        echo(style(line, fg='green'), color=True)
+        return
+    elif line.startswith('@@') and not (line.startswith('-@@') or line.startswith('+@@') or line.startswith(' @@')):
+        # Hunk header from outer diff (not nested)
+        echo(style(line, fg='cyan'), color=True)
+        return
+    elif line.startswith('-@@') or line.startswith('-index ') or line.startswith('-diff ') or line.startswith('----') or line.startswith('-+++'):
+        # Nested metadata in removed section - red fg only
+        echo(style(line, fg='red'), color=True)
+        return
+    elif line.startswith('+@@') or line.startswith('+index ') or line.startswith('+diff ') or line.startswith('++++') or line.startswith('+---'):
+        # Nested metadata in added section - green fg only
+        echo(style(line, fg='green'), color=True)
+        return
+
+    # Handle nested diff patterns (diff of diffs)
+    # Use 256-color palette matching Claude's diff colors
+    # Greens: 28 (brighter #00a858-like), 22 (darker #005e25-like)
+    # Reds: 161 (brighter #c1536a-like), 88 (darker #852135-like)
+    # Background determined by FIRST char: + = green, - = red
+    # First 2 chars get their own bg colors based on symbols
+    # All lines in the nested diff have outer prefix (+, -, or space)
+    if len(line) >= 2 and line[0] in '+-':
+        prefix = line[:2]
+        rest = line[2:]
+
+        # Determine prefix backgrounds based on each char
+        prefix_bg = []
+        for char in prefix:
+            if char == '+':
+                prefix_bg.append('28')  # bright green
+            elif char == '-':
+                prefix_bg.append('161')  # bright red
+            else:  # space
+                prefix_bg.append('0')  # black/clear
+
+        # Determine line background based on first char
+        if line[0] == '+':
+            line_bg_bright = '28'
+            line_bg_dark = '22'
+            line_bg_vdark = '23'
+        else:  # '-'
+            line_bg_bright = '161'
+            line_bg_dark = '88'
+            line_bg_vdark = '52'
+
+        if line.startswith('++'):
+            # Added line in added section - white on bright green (bold)
+            print(f'\033[1;38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_bright}m{rest}\033[0m')
+        elif line.startswith('--'):
+            # Removed line in removed section - white on bright red (bold)
+            print(f'\033[1;38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_bright}m{rest}\033[0m')
+        elif line.startswith('+ '):
+            # Context line in added section - white on very dark green
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_vdark}m{rest}\033[0m')
+        elif line.startswith('- '):
+            # Context line in removed section - white on very dark red
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_vdark}m{rest}\033[0m')
+        elif line.startswith('+-'):
+            # Line in added section (+ first char = green bg)
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_dark}m{rest}\033[0m')
+        elif line.startswith('-+'):
+            # Line in removed section (- first char = red bg)
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_dark}m{rest}\033[0m')
+        elif line.startswith('+'):
+            # Any other line in added section (e.g., +diff, +index)
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1] if len(prefix) > 1 else line_bg_dark}m{prefix[1] if len(prefix) > 1 else ""}\033[48;5;{line_bg_dark}m{rest}\033[0m')
+        elif line.startswith('-'):
+            # Any other line in removed section (e.g., -diff, -index)
+            print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1] if len(prefix) > 1 else line_bg_dark}m{prefix[1] if len(prefix) > 1 else ""}\033[48;5;{line_bg_dark}m{rest}\033[0m')
+        else:
+            echo(line)
+    elif line.startswith(' '):
+        # Context line from outer diff (no color)
+        echo(line)
+    else:
+        echo(line)
 
 
 @group()
@@ -141,7 +253,7 @@ def stat(
     else:
         if len(args) < 2:
             err("Expected two refspecs (or use -r for rebase mode)")
-            sys.exit(1)
+            sys.exit(2)
         refspec1 = expand_refspec(args[0])
         refspec2 = expand_refspec(args[1])
         paths = args[2:]
@@ -167,7 +279,7 @@ def stat(
         result1 = run(cmd1, capture_output=True, text=True)
         if result1.returncode != 0:
             err(f"Error getting diff for {refspec1}: {result1.stderr}")
-            sys.exit(1)
+            sys.exit(2)
 
         cmd2 = build_diff_cmd(ignore_whitespace, find_renames, find_copies, follow=use_follow)
         cmd2.extend(['--numstat', refspec2])
@@ -176,7 +288,7 @@ def stat(
         result2 = run(cmd2, capture_output=True, text=True)
         if result2.returncode != 0:
             err(f"Error getting diff for {refspec2}: {result2.stderr}")
-            sys.exit(1)
+            sys.exit(2)
 
         lines1 = result1.stdout.splitlines()
         lines2 = result2.stdout.splitlines()
@@ -230,6 +342,8 @@ def stat(
 
         if not has_changes:
             err("No differences in diff stats")
+        else:
+            sys.exit(1)
 
 
 @cli.command()
@@ -238,6 +352,8 @@ def stat(
 @flag('-r', '--rebase', help='Rebase mode: auto-detect refspecs via git ours-refspec/theirs-refspec')
 @opt('-U', '--unified', type=int, default=3, help='Number of context lines to show (default: 3)')
 @flag('-q', '--quiet', help='Only show files with differences')
+@json_flag
+@normalize_opt
 @arg('args', nargs=-1)
 def patch(
     color: str,
@@ -248,6 +364,8 @@ def patch(
     rebase: bool,
     unified: int,
     quiet: bool,
+    json_out: bool,
+    normalize_level: str,
     ignore_whitespace: bool,
     args: tuple[str, ...],
 ) -> None:
@@ -279,6 +397,18 @@ def patch(
         git-didi patch mboh mbot             # feature vs upstream
         git-didi patch mbrhp oth             # mid-rebase progress
         git-didi patch mboh oth pqa -p data.parquet  # with pipeline
+
+    \b
+    Normalization (-n, cumulative; each file is also classified by the
+    least-lenient level at which its two patches are equal):
+        none     compare patches as-is
+        index    ignore `index <sha>..<sha>` lines (default)
+        lines    also ignore hunk-header line numbers
+        context  also ignore context lines (compare ordered +/- lines)
+        ws       also ignore whitespace within changed lines
+        tokens   also compare token-level edit scripts, not whole lines
+
+    Exits 1 if any file differs (at the -n level), 2 on error.
     """
     # Parse refspecs based on mode
     if rebase:
@@ -289,7 +419,7 @@ def patch(
         # Standard mode: first two args are refspecs
         if len(args) < 2:
             err("Expected two refspecs (or use -r for rebase mode)")
-            sys.exit(1)
+            sys.exit(2)
         # Expand sentinel refspecs
         refspec1 = expand_refspec(args[0])
         refspec2 = expand_refspec(args[1])
@@ -302,7 +432,7 @@ def patch(
         paths = tuple(parse_paths(path))
         if not pipeline_cmds:
             err("Pipeline mode requires at least one pipeline command")
-            sys.exit(1)
+            sys.exit(2)
     else:
         # Backward compatible: remaining args are paths, no pipeline
         pipeline_cmds = []
@@ -312,239 +442,65 @@ def patch(
     use_color = should_use_color(color)
 
     with Pager(pager):
-        # Pipeline mode: compare pipeline-processed diffs
         if pipeline_cmds:
-            different_files = []
+            # Pipeline mode: compare pipeline-processed diffs
+            left, right = {}, {}
             for filepath in paths:
-                diff1 = get_file_diff_with_pipeline(
-                    refspec1, filepath, pipeline_cmds,
-                    ignore_whitespace=ignore_whitespace,
-                    unified=unified,
-                )
-                diff2 = get_file_diff_with_pipeline(
-                    refspec2, filepath, pipeline_cmds,
-                    ignore_whitespace=ignore_whitespace,
-                    unified=unified,
-                )
+                for refspec, patches in ((refspec1, left), (refspec2, right)):
+                    patches[filepath] = get_file_diff_with_pipeline(
+                        refspec, filepath, pipeline_cmds,
+                        ignore_whitespace=ignore_whitespace,
+                        unified=unified,
+                    )
+            rename_map = {}
+        else:
+            # Compute upstream range to detect renames
+            # E.g., if comparing A..B vs C..D, look at A..C for upstream changes
+            upstream_range = compute_upstream_range(refspec1, refspec2)
+            rename_map = {}
+            if upstream_range:
+                rename_map = get_rename_mapping(upstream_range, find_renames, find_copies)
+                if rename_map:
+                    err(f"Detected {len(rename_map)} rename(s) in upstream ({upstream_range})")
+            opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+            left = range_patches(refspec1, opts=opts, paths=paths)
+            right = range_patches(refspec2, opts=opts, paths=paths)
 
-                if diff1 != diff2:
-                    different_files.append(filepath)
-                    if not quiet:
-                        echo(style(f"\n{'='*60}", fg='blue') if use_color else f"\n{'='*60}")
-                        echo(style(f"File: {filepath}", fg='yellow', bold=True) if use_color else f"File: {filepath}")
-                        echo(style(f"{'='*60}", fg='blue') if use_color else f"{'='*60}")
+        results = compare_patches(left, right, rename_map, threshold=normalize_level)
+        different = [r for r in results if r.status != 'equal']
 
-                        # Show the diff of diffs for this file
-                        from_label = f'{filepath} in {refspec1}'
-                        to_label = f'{filepath} in {refspec2}'
-                        diff_lines = list(difflib.unified_diff(
-                            diff1.splitlines(),
-                            diff2.splitlines(),
-                            fromfile=from_label,
-                            tofile=to_label,
-                            lineterm=''
-                        ))
-
-                        for line in diff_lines:
-                            if use_color:
-                                if line.startswith('+') and not line.startswith('+++'):
-                                    echo(style(line, fg='green'), color=True)
-                                elif line.startswith('-') and not line.startswith('---'):
-                                    echo(style(line, fg='red'), color=True)
-                                elif line.startswith('@@'):
-                                    echo(style(line, fg='cyan'), color=True)
-                                else:
-                                    echo(line)
-                            else:
-                                echo(line)
-
-            if quiet and different_files:
-                echo(style("\nFiles with different patches:", fg='yellow', bold=True) if use_color else "\nFiles with different patches:")
-                for f in different_files:
-                    echo(f"  {f}")
-
-            if not different_files:
-                err("No differences in patches")
-            else:
-                err(f"\n{len(different_files)} file(s) have different patches")
-            return
-
-        # Non-pipeline mode: original behavior
-        # Compute upstream range to detect renames
-        # E.g., if comparing A..B vs C..D, look at A..C for upstream changes
-        upstream_range = compute_upstream_range(refspec1, refspec2)
-        rename_map = {}
-        if upstream_range:
-            rename_map = get_rename_mapping(upstream_range, find_renames, find_copies)
-            if rename_map:
-                err(f"Detected {len(rename_map)} rename(s) in upstream ({upstream_range})")
-
-        # Get list of changed files in both refspecs
-        files1 = get_changed_files(refspec1, paths)
-        files2 = get_changed_files(refspec2, paths)
-
-        # Apply rename mapping to files1
-        # If a file was renamed in upstream, we need to look for it under the new name in refspec2
-        files1_mapped = []
-        for f in files1:
-            if f in rename_map:
-                files1_mapped.append((f, rename_map[f]))  # (old_name, new_name)
-            else:
-                files1_mapped.append((f, f))  # (name, name)
-
-        # Build set of all file names to compare
-        all_files_to_compare = []
-        for old_name, new_name in files1_mapped:
-            all_files_to_compare.append((old_name, new_name))
-
-        # Also check files that only appear in files2
-        files1_new_names = {new_name for _, new_name in files1_mapped}
-        for f2 in files2:
-            if f2 not in files1_new_names:
-                all_files_to_compare.append((f2, f2))
-
-        # Fetch all diffs in parallel
-        def fetch_diffs(old_path, new_path):
-            diff1 = get_file_diff(refspec1, old_path, ignore_whitespace, unified, find_renames, find_copies)
-            diff2 = get_file_diff(refspec2, new_path, ignore_whitespace, unified, find_renames, find_copies)
-            return (old_path, new_path), diff1, diff2
-
-        file_diffs = {}
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = {executor.submit(fetch_diffs, old_path, new_path): (old_path, new_path)
-                      for old_path, new_path in all_files_to_compare}
-            for future in as_completed(futures):
-                file_pair, diff1, diff2 = future.result()
-                file_diffs[file_pair] = (diff1, diff2)
-
-        # Process results in order
-        different_files = []
-        for old_path, new_path in all_files_to_compare:
-            diff1, diff2 = file_diffs[(old_path, new_path)]
-
-            # Normalize diffs to ignore index SHAs and map paths
-            norm_diff1 = normalize_diff(diff1, rename_map)
-            norm_diff2 = normalize_diff(diff2)
-
-            if norm_diff1 != norm_diff2:
-                # Display name: show rename if applicable
-                display_name = f"{old_path} → {new_path}" if old_path != new_path else old_path
-                different_files.append(display_name)
-                if not quiet:
-                    echo(style(f"\n{'='*60}", fg='blue') if use_color else f"\n{'='*60}")
-                    echo(style(f"File: {display_name}", fg='yellow', bold=True) if use_color else f"File: {display_name}")
-                    echo(style(f"{'='*60}", fg='blue') if use_color else f"{'='*60}")
-
-                    # Show the diff of diffs for this file
-                    from_label = f'{old_path} in {refspec1}'
-                    to_label = f'{new_path} in {refspec2}'
-                    diff_lines = list(difflib.unified_diff(
-                        diff1.splitlines(),
-                        diff2.splitlines(),
-                        fromfile=from_label,
-                        tofile=to_label,
-                        lineterm=''
-                    ))
-
-                    for line in diff_lines:
-                        if use_color:
-                            # Handle unified diff headers from outer diff first (---, +++, @@)
-                            # These are lines from the outer diff, not nested patterns
-                            if line.startswith('---') and not line.startswith('----'):
-                                # Real outer diff header - red fg
-                                echo(style(line, fg='red'), color=True)
-                                continue
-                            elif line.startswith('+++') and not line.startswith('++++'):
-                                # Real outer diff header - green fg
-                                echo(style(line, fg='green'), color=True)
-                                continue
-                            elif line.startswith('@@') and not (line.startswith('-@@') or line.startswith('+@@') or line.startswith(' @@')):
-                                # Hunk header from outer diff (not nested)
-                                echo(style(line, fg='cyan'), color=True)
-                                continue
-                            elif line.startswith('-@@') or line.startswith('-index ') or line.startswith('-diff ') or line.startswith('----') or line.startswith('-+++'):
-                                # Nested metadata in removed section - red fg only
-                                echo(style(line, fg='red'), color=True)
-                                continue
-                            elif line.startswith('+@@') or line.startswith('+index ') or line.startswith('+diff ') or line.startswith('++++') or line.startswith('+---'):
-                                # Nested metadata in added section - green fg only
-                                echo(style(line, fg='green'), color=True)
-                                continue
-
-                            # Handle nested diff patterns (diff of diffs)
-                            # Use 256-color palette matching Claude's diff colors
-                            # Greens: 28 (brighter #00a858-like), 22 (darker #005e25-like)
-                            # Reds: 161 (brighter #c1536a-like), 88 (darker #852135-like)
-                            # Background determined by FIRST char: + = green, - = red
-                            # First 2 chars get their own bg colors based on symbols
-                            # All lines in the nested diff have outer prefix (+, -, or space)
-                            if len(line) >= 2 and line[0] in '+-':
-                                prefix = line[:2]
-                                rest = line[2:]
-
-                                # Determine prefix backgrounds based on each char
-                                prefix_bg = []
-                                for char in prefix:
-                                    if char == '+':
-                                        prefix_bg.append('28')  # bright green
-                                    elif char == '-':
-                                        prefix_bg.append('161')  # bright red
-                                    else:  # space
-                                        prefix_bg.append('0')  # black/clear
-
-                                # Determine line background based on first char
-                                if line[0] == '+':
-                                    line_bg_bright = '28'
-                                    line_bg_dark = '22'
-                                    line_bg_vdark = '23'
-                                else:  # '-'
-                                    line_bg_bright = '161'
-                                    line_bg_dark = '88'
-                                    line_bg_vdark = '52'
-
-                                if line.startswith('++'):
-                                    # Added line in added section - white on bright green (bold)
-                                    print(f'\033[1;38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_bright}m{rest}\033[0m')
-                                elif line.startswith('--'):
-                                    # Removed line in removed section - white on bright red (bold)
-                                    print(f'\033[1;38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_bright}m{rest}\033[0m')
-                                elif line.startswith('+ '):
-                                    # Context line in added section - white on very dark green
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_vdark}m{rest}\033[0m')
-                                elif line.startswith('- '):
-                                    # Context line in removed section - white on very dark red
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_vdark}m{rest}\033[0m')
-                                elif line.startswith('+-'):
-                                    # Line in added section (+ first char = green bg)
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_dark}m{rest}\033[0m')
-                                elif line.startswith('-+'):
-                                    # Line in removed section (- first char = red bg)
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1]}m{prefix[1]}\033[48;5;{line_bg_dark}m{rest}\033[0m')
-                                elif line.startswith('+'):
-                                    # Any other line in added section (e.g., +diff, +index)
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1] if len(prefix) > 1 else line_bg_dark}m{prefix[1] if len(prefix) > 1 else ""}\033[48;5;{line_bg_dark}m{rest}\033[0m')
-                                elif line.startswith('-'):
-                                    # Any other line in removed section (e.g., -diff, -index)
-                                    print(f'\033[38;5;231;48;5;{prefix_bg[0]}m{prefix[0]}\033[48;5;{prefix_bg[1] if len(prefix) > 1 else line_bg_dark}m{prefix[1] if len(prefix) > 1 else ""}\033[48;5;{line_bg_dark}m{rest}\033[0m')
-                                else:
-                                    echo(line)
-                            elif line.startswith(' '):
-                                # Context line from outer diff (no color)
-                                echo(line)
-                            else:
-                                echo(line)
-                        else:
-                            echo(line)
-
-        if quiet and different_files:
+        if json_out:
+            echo(json.dumps([r.to_json() for r in results], indent=2))
+        elif not quiet:
+            for r in different:
+                # E.g. "(equal@context)": differs at the `-n` level, but would be equal at a more lenient one
+                hint = f" ({r.label})" if r.label != 'differs' else ''
+                rule = f"\n{'='*60}"
+                echo(style(rule, fg='blue') if use_color else rule)
+                header = f"File: {r.display_name}{hint}"
+                echo(style(header, fg='yellow', bold=True) if use_color else header)
+                echo(style('='*60, fg='blue') if use_color else '='*60)
+                left_lines, right_lines = display_lines(r, normalize_level)
+                for line in difflib.unified_diff(
+                    left_lines,
+                    right_lines,
+                    fromfile=f'{r.left_path} in {refspec1}',
+                    tofile=f'{r.path} in {refspec2}',
+                    lineterm='',
+                ):
+                    echo_didi_line(line, use_color)
+        elif different:
             echo(style("\nFiles with different patches:", fg='yellow', bold=True) if use_color else "\nFiles with different patches:")
-            for f in different_files:
-                echo(f"  {f}")
+            for r in different:
+                echo(f"  {r.display_name} ({r.label})")
 
-        if not different_files:
+        if results:
+            err(f"\n{summarize([r.label for r in results])}")
+        if not different:
             err("No differences in patches")
         else:
-            err(f"\n{len(different_files)} file(s) have different patches")
+            err(f"{len(different)} file(s) have different patches")
+            sys.exit(1)
 
 
 @cli.command()
@@ -651,7 +607,7 @@ def commits(
     else:
         if len(args) < 2:
             err("Expected two refspecs (or use -r for rebase mode)")
-            sys.exit(1)
+            sys.exit(2)
         refspec1 = expand_refspec(args[0])
         refspec2 = expand_refspec(args[1])
 
@@ -720,6 +676,215 @@ def commits(
                         echo(f"    {filepath}: patches differ")
             else:
                 echo(f"[{i+1}] {msg} - identical")
+
+
+@cli.command()
+@opt('-C', '--find-copies', type=str, metavar='[<n>]', help='Detect copies as well as renames (similarity threshold, e.g., 50% or 0.5)')
+@json_flag
+@opt('-M', '--find-renames', type=str, metavar='[<n>]', help='Detect renames (similarity threshold, e.g., 50% or 0.5)')
+@normalize_opt
+@opt('-s', '--since', help='Only consider picks committed since this date (passed to `git log --since`)')
+@opt('-U', '--unified', type=int, default=3, help='Number of context lines in compared patches (default: 3)')
+@flag('-v', '--verbose', help='List every pick (and each non-equal file), not just non-equal picks')
+@flag('-w', '--ignore-whitespace', help='Pass -w to git diff commands to ignore whitespace')
+@arg('revs', nargs=-1)
+def picks(
+    find_copies: str,
+    json_out: bool,
+    find_renames: str,
+    normalize_level: str,
+    since: str,
+    unified: int,
+    verbose: bool,
+    ignore_whitespace: bool,
+    revs: tuple[str, ...],
+) -> None:
+    """Check that cherry-picks are the same patch as their sources.
+
+    For each commit in REVS (`git log` args; default HEAD) with a
+    "(cherry picked from commit X)" trailer, compare X's patch with the pick's,
+    and classify it as equal, equal@<level> (see "patch --help"), differs,
+    files-differ (different file sets, e.g. an adapted pick), or missing
+    (source not in the repo, e.g. rewritten history).
+
+    Prints one line per pick that isn't equal at the -n level, and a summary.
+    Exits 1 if any such pick exists (missing sources don't count), 2 on error.
+
+    \b
+    Examples:
+        git-didi picks main..feature
+        git-didi picks -s 2026-09-28 gcs cw hf
+    """
+    opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+    results = classify_picks(find_picks(revs or ('HEAD',), since), opts, normalize_level)
+    bad = [r for r in results if not r.ok(normalize_level)]
+    if json_out:
+        echo(json.dumps([r.to_json(normalize_level) for r in results], indent=2))
+    else:
+        for r in results:
+            if not verbose and r.ok(normalize_level) and r.cls != 'missing':
+                continue
+            p = r.pick
+            src = (p.source_sha or p.source)[:10]
+            echo(f"{p.commit[:10]} {r.cls:<13} {src:<10} {p.subject}")
+            if verbose or not r.ok(normalize_level):
+                for f in r.files:
+                    if f.status != 'equal':
+                        echo(f"    {f.label:<13} {f.display_name}")
+    err(f"{len(results)} pick(s): {summarize([r.cls for r in results], PICK_ORDER)}" if results else "No picks found")
+    if bad:
+        sys.exit(1)
+
+
+PICK_ORDER = ['equal', 'equal@lines', 'equal@context', 'equal@ws', 'equal@tokens', 'differs', 'files-differ', 'missing']
+
+
+def print_delta(result: DeltaResult, verbose: bool) -> None:
+    (lf, la, ld), (rf, ra, rd) = result.sizes()
+    (base_a, tip_a), (base_b, tip_b) = result.left_range, result.right_range
+    echo(f"{result.label}")
+    echo(f"  delta: {lf} files +{la}/-{ld} → {rf} files +{ra}/-{rd}")
+    if result.absorbed:
+        echo(f"  absorbed picks: {len(result.absorbed)}")
+    labels = [f.label for f in result.files]
+    if labels:
+        echo(f"  {summarize(labels)}")
+    for f in result.files:
+        if verbose or f.status not in ('equal', 'absorbed', 'adopted'):
+            extra = f" ({f.absorbed_lines}/{f.residual_lines} residual lines explained)" if f.absorbed_lines and f.label == 'differs' else ''
+            echo(f"    {f.label:<13} {f.display_name}{extra}")
+    if not result.ok():
+        echo(f"  git-didi patch {base_a[:10]}..{tip_a[:10]} {base_b[:10]}..{tip_b[:10]}")
+
+
+def delta_opts(func):
+    """Options shared by `delta` and `merge`."""
+    for decorator in reversed([
+        opt('-C', '--find-copies', type=str, metavar='[<n>]', help='Detect copies as well as renames (similarity threshold, e.g., 50% or 0.5)'),
+        json_flag,
+        opt('-M', '--find-renames', type=str, metavar='[<n>]', help='Detect renames (similarity threshold, e.g., 50% or 0.5)'),
+        normalize_opt,
+        opt('-U', '--unified', type=int, default=3, help='Number of context lines in compared patches (default: 3)'),
+        flag('-v', '--verbose', help='List every file, not just ones that differ'),
+        flag('-w', '--ignore-whitespace', help='Pass -w to git diff commands to ignore whitespace'),
+    ]):
+        func = decorator(func)
+    return func
+
+
+def report_deltas(results: list[DeltaResult], json_out: bool, verbose: bool) -> None:
+    if json_out:
+        echo(json.dumps([r.to_json() for r in results], indent=2))
+    else:
+        for i, r in enumerate(results):
+            if i:
+                echo()
+            print_delta(r, verbose)
+    bad = [r for r in results if not r.ok()]
+    if bad:
+        err(f"{len(bad)} of {len(results)} delta(s) differ")
+        sys.exit(1)
+
+
+@cli.command()
+@delta_opts
+@opt('-a', '--at', 'at', multiple=True, help='Reflog selector for both branches (`CHILD@{AT}`), e.g. a date; pass once or twice (default for the 2nd: current tips)')
+@arg('refs', nargs=-1, required=True)
+def delta(
+    find_copies: str,
+    json_out: bool,
+    find_renames: str,
+    normalize_level: str,
+    unified: int,
+    verbose: bool,
+    ignore_whitespace: bool,
+    at: tuple[str, ...],
+    refs: tuple[str, ...],
+) -> None:
+    """Compare a child branch's own delta at two points.
+
+    The own delta at a point is `merge-base(CHILD, PARENT)..CHILD`.
+
+    Files are classified as equal / equal@<level> (see "patch --help"), absorbed
+    (the residual is fully explained by commits that entered the base and
+    duplicate the child's own commits, by `-x` trailer or patch-id), adopted
+    (lines the delta lost are now in the base, without a matching pick),
+    differs, left-only, or right-only. Exits 1 if any file differs (at the -n level), 2
+    on error.
+
+    \b
+    Forms:
+        git-didi delta CHILD PARENT --at A [--at B]
+        git-didi delta CHILD_A PARENT_A CHILD_B PARENT_B
+    """
+    if len(refs) == 4:
+        if at:
+            err("--at doesn't apply with 4 refs")
+            sys.exit(2)
+        points = [(refs[0], refs[1]), (refs[2], refs[3])]
+    elif len(refs) == 2:
+        if not 1 <= len(at) <= 2:
+            err("Pass --at once or twice with CHILD PARENT")
+            sys.exit(2)
+        child, parent = refs
+        points = [
+            (f'{child}@{{{a}}}', f'{parent}@{{{a}}}') if a is not None else (child, parent)
+            for a in (at[0], at[1] if len(at) > 1 else None)
+        ]
+    else:
+        err("Expected CHILD PARENT (with --at), or CHILD_A PARENT_A CHILD_B PARENT_B")
+        sys.exit(2)
+    (child_a, parent_a), (child_b, parent_b) = points
+    tip_a, tip_b = rev_parse(child_a), rev_parse(child_b)
+    before = (merge_base(tip_a, rev_parse(parent_a)), tip_a)
+    after = (merge_base(tip_b, rev_parse(parent_b)), tip_b)
+    opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+    result = compare_delta(f'{child_a} vs {parent_a} → {child_b} vs {parent_b}', before, after, opts, normalize_level)
+    report_deltas([result], json_out, verbose)
+
+
+@cli.command()
+@delta_opts
+@arg('merges', nargs=-1, required=True)
+def merge(
+    find_copies: str,
+    json_out: bool,
+    find_renames: str,
+    normalize_level: str,
+    unified: int,
+    verbose: bool,
+    ignore_whitespace: bool,
+    merges: tuple[str, ...],
+) -> None:
+    """Check that merges preserve the first parent's own delta.
+
+    For each merge M, compares `merge-base(M^1, M^2)..M^1` with `M^2..M`. A
+    range arg (e.g. `gcs~20..gcs`) expands to its first-parent merges.
+
+    Files are classified as equal / equal@<level> (see "patch --help"), absorbed
+    (the residual is fully explained by commits that entered the base and
+    duplicate the child's own commits, by `-x` trailer or patch-id), adopted
+    (lines the delta lost are now in the base, without a matching pick),
+    differs, left-only, or right-only. Exits 1 if any file differs (at the -n level), 2
+    on error.
+
+    \b
+    Examples:
+        git-didi merge a96bd9b3
+        git-didi merge -v gcs~20..gcs
+    """
+    opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+    shas = expand_merges(merges)
+    if not shas:
+        err("No merges found")
+        sys.exit(2)
+    results = []
+    for sha in shas:
+        result = merge_delta(sha, opts, normalize_level)
+        subject = git('log', '-1', '--format=%s', sha).strip()
+        result.label = f'{sha[:10]} {subject}'
+        results.append(result)
+    report_deltas(results, json_out, verbose)
 
 
 if __name__ == '__main__':

@@ -68,6 +68,8 @@ This shows a "diff of diffs" with sophisticated coloring to distinguish:
 - Changes in the inner diffs (the actual patches)
 
 Options:
+- `-n LEVEL` / `--normalize LEVEL`: Normalization level at which patches count as equal (see [Normalization levels](#normalization-levels); default: `index`)
+- `-j` / `--json`: Print one JSON record per file (`{path, status, level, left_lines, right_lines}`) instead of diffs
 - `-U N` / `--unified N`: Set context lines (default: 3)
 - `-q` / `--quiet`: Only list files with differences
 - `-w` / `--ignore-whitespace`: Ignore whitespace changes
@@ -75,6 +77,52 @@ Options:
 - `-C[n]` / `--find-copies[=n]`: Detect copies
 - `--color {auto,always,never}`: Control colored output
 - `--pager {auto,always,never}`: Control pager usage
+
+Each file is also classified by the least-lenient level at which its two patches are equal, and a summary goes to stderr, e.g. `12 equal, 3 equal@lines, 1 equal@context, 2 differs`.
+
+#### Normalization levels
+
+Levels are cumulative; each ignores everything the previous ones do:
+
+| level | ignores |
+|---|---|
+| `none` | nothing |
+| `index` (default) | `index <sha>..<sha>` lines |
+| `lines` | hunk-header line numbers (`@@ -a,b +c,d @@ ctx` → `@@ ctx`) |
+| `context` | context lines and hunk boundaries (compares each file's ordered `+`/`-` lines) |
+| `ws` | whitespace within changed lines |
+| `tokens` | whole lines: each block of `-`/`+` lines becomes a token-level edit script, e.g. both `f(a, b)` → `f(a, b, x=1)` and `f(a, b, c)` → `f(a, b, c, x=1)` are `insert: , x = 1` |
+
+#### `picks` - Check cherry-pick fidelity
+
+For each commit with a `(cherry picked from commit X)` trailer, compare `X`'s patch with the pick's:
+
+```bash
+git-didi picks main..feature
+git-didi picks -s 2026-09-28 gcs cw hf   # `git log` args; default HEAD
+```
+
+Each pick is `equal`, `equal@<level>`, `differs`, `files-differ` (different file sets, e.g. an adapted pick), or `missing` (source not in the repo). Lists the picks that aren't equal at the `-n` level (`-v`: all), plus a summary.
+
+#### `merge` / `delta` - Check that a branch's own delta survives merges
+
+```bash
+git-didi merge a96bd9b3          # mb(M^1, M^2)..M^1  vs  M^2..M
+git-didi merge gcs~20..gcs       # each first-parent merge in a range
+git-didi delta gcs cloud --at 2026-10-01             # gcs's own delta then vs. now
+git-didi delta CHILD_A PARENT_A CHILD_B PARENT_B     # explicit points
+```
+
+A child's own delta is `merge-base(child, parent)..child`. Merging the parent legitimately shrinks it when the parent already took some of the child's changes, so beyond `equal@<level>` files are:
+- `absorbed`: the residual is fully explained by commits that entered the base and duplicate the child's own commits (by `-x` trailer, in either direction, or by `git patch-id --stable`)
+- `adopted`: lines the delta lost are now in the base without a matching pick (e.g. the parent copied files in a squashed commit)
+- `differs` / `left-only` / `right-only`: anything else
+
+Prints each delta's size before and after, and a `git-didi patch …` command to inspect what differs.
+
+#### Exit codes
+
+`patch`, `stat`, `picks`, `merge`, and `delta` exit 1 when they find differences (at the `-n` level), 2 on errors, 0 otherwise.
 
 #### `commits` - Compare commits
 
@@ -124,7 +172,7 @@ git gddp main..feature upstream/main..feature
 
 ## How it works
 
-The tool automatically filters out spurious differences like git index SHAs that change even when the actual patch content is identical. This makes it easy to verify that a rebase or cherry-pick truly preserved your changes without introducing unexpected modifications.
+The tool automatically filters out spurious differences like git index SHAs that change even when the actual patch content is identical (and `-n` can ignore more; see [Normalization levels](#normalization-levels)). This makes it easy to verify that a rebase or cherry-pick truly preserved your changes without introducing unexpected modifications.
 
 When comparing patches, it uses a sophisticated 256-color palette to make nested diffs easy to read:
 - Bright backgrounds for added/removed lines within the outer diff
