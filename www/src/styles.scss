@@ -362,3 +362,13 @@ button.link { background: none; border: 0; padding: 0; color: var(--link); font-
   .tracks .track-head, .tracks .track-row { grid-template-columns: 60px 100px 1fr; }
   .tracks .track-files { margin-left: 0; }
 }
+
+// serve mode
+.serve-chip { font-size: 11px; font-family: var(--mono); background: var(--panel); border: 1px solid var(--border); border-radius: 999px; padding: 0 8px; }
+.compare {
+  margin-top: 16px;
+  form { display: flex; gap: 6px; flex-wrap: wrap; }
+  input, select { font: inherit; font-family: var(--mono); font-size: 13px; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--fg); }
+  input { flex: 1 1 280px; min-width: 0; }
+  .error { color: var(--loud); }
+}

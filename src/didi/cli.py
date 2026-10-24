@@ -952,5 +952,60 @@ def report(
         err(f"Wrote {output}: {len(data['lanes'])} lanes, {len(data['picks'])} picks, {len(data['merges'])} merges")
 
 
+@cli.command()
+@opt('-c', '--config', help='Lanes config for the report view (default: didi.yml, if present; else only range comparisons)')
+@opt('-C', '--find-copies', type=str, metavar='[<n>]', help='Detect copies as well as renames (similarity threshold, e.g., 50% or 0.5)')
+@opt('-H', '--host', default='127.0.0.1', help='Interface to bind (default: 127.0.0.1)')
+@opt('-j', '--jobs', type=int, default=8, help='Merges to check in parallel when building the report (default: 8)')
+@opt('-M', '--find-renames', type=str, metavar='[<n>]', help='Detect renames (similarity threshold, e.g., 50% or 0.5)')
+@normalize_opt
+@opt('-p', '--port', type=int, default=6093, help='Port (default: 6093)')
+@opt('-s', '--since', help="Report: only commits since this date (default: the config's `since`)")
+@opt('-U', '--unified', type=int, default=3, help='Number of context lines in compared patches (default: 3)')
+@flag('-w', '--ignore-whitespace', help='Pass -w to git diff commands to ignore whitespace')
+@opt('-W', '--www', help='Built viewer directory (default: the packaged one, else www/dist in a source checkout)')
+def serve(
+    config: str,
+    find_copies: str,
+    host: str,
+    jobs: int,
+    find_renames: str,
+    normalize_level: str,
+    port: int,
+    since: str,
+    unified: int,
+    ignore_whitespace: bool,
+    www: str,
+) -> None:
+    """Serve the web viewer for the current repo.
+
+    With a lanes config, the viewer loads this repo's report (built on first
+    view, cached at $GIT_DIR/didi/report.json, rebuilt incrementally from the
+    viewer's refresh button). Either way, its Compare view diffs any two ranges
+    (`patch A..B C..D`), with every non-equal file's diff of diffs.
+
+    \b
+    Examples:
+        git-didi serve -c didi.yml
+        git-didi serve              # range comparisons only (no didi.yml)
+    """
+    from pathlib import Path
+    from .serve import find_www, serve as run_server
+    try:
+        www_dir = find_www(www)
+    except FileNotFoundError as e:
+        err(str(e))
+        sys.exit(2)
+    cfg = None
+    if config or Path('didi.yml').is_file():
+        try:
+            cfg = load_config(config or 'didi.yml')
+        except (OSError, ValueError) as e:
+            err(str(e))
+            sys.exit(2)
+    opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+    run_server(host, port, www_dir, cfg, opts, normalize_level, since, jobs, log=err)
+
+
 if __name__ == '__main__':
     cli()

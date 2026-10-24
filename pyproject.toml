@@ -46,4 +46,5 @@ git-didi = "didi.cli:cli"
 where = ["src"]
 
 [tool.setuptools.package-data]
-didi = ["shell/*.bash", "shell/*.fish"]
+# `www_dist`: the built web viewer for `git-didi serve`, copied in from `www/dist` by the release workflow
+didi = ["shell/*.bash", "shell/*.fish", "www_dist/*", "www_dist/assets/*"]

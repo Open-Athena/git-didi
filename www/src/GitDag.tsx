@@ -57,7 +57,8 @@ export function GitDag({ dag, width, dark, laneH = 40, labelW = 128, onItem }: {
   const preW = prelude ? 64 : 0
   const lx = treeW
   const x0 = lx + labelW + preW
-  const colW = max(4, (width - x0 - 10) / max(1, days.length))
+  // a few days shouldn't each span half the chart
+  const colW = min(90, max(4, (width - x0 - 10) / max(1, days.length)))
   const top = 20
   const laneY = useMemo(() => Object.fromEntries(lanes.map((l, i) => [l.id, top + i * laneH + laneH / 2])), [lanes, laneH])
   const dayX = useMemo(() => Object.fromEntries(days.map((d, i) => [d, x0 + (i + 0.5) * colW])), [days, x0, colW])

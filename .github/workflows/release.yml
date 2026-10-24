@@ -30,6 +30,14 @@ jobs:
       id-token: write
     steps:
     - uses: actions/checkout@v4
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Build web viewer (packaged for `git-didi serve`)
+      run: cd www && pnpm install --frozen-lockfile && pnpm build && cp -r dist ../src/didi/www_dist
     - uses: astral-sh/setup-uv@v7
     - run: uv python install 3.12
     - name: Build package
@@ -50,6 +58,14 @@ jobs:
     - uses: actions/checkout@v4
     - name: Fetch tag annotation
       run: git fetch origin tag ${{ github.ref_name }} --force
+    - uses: pnpm/action-setup@v4
+      with:
+        version: 10
+    - uses: actions/setup-node@v4
+      with:
+        node-version: 22
+    - name: Build web viewer (packaged for `git-didi serve`)
+      run: cd www && pnpm install --frozen-lockfile && pnpm build && cp -r dist ../src/didi/www_dist
     - uses: astral-sh/setup-uv@v7
     - run: uv python install 3.12
     - name: Build package

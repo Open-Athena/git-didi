@@ -12,7 +12,9 @@ export type Refs = { left: SideRefs, right: SideRefs }
 const GROUPS: FileLabel[] = ['differs', 'left-only', 'right-only', 'equal@tokens', 'equal@ws', 'equal@context', 'equal@lines', 'adopted', 'absorbed']
 const OPEN = new Set<FileLabel>(['differs', 'equal@tokens', 'equal@ws'])
 
-export function Detail({ report, sha, lanes, onClose }: { report: Report, sha: string, lanes: Record<string, Lane>, onClose: () => void }) {
+export function Detail({ report, sha, lanes, onClose, onCompare }: {
+  report: Report, sha: string, lanes: Record<string, Lane>, onClose: () => void, onCompare?: (left: string, right: string) => void,
+}) {
   const pick = report.picks[sha], merge = report.merges[sha]
   const cmd = itemCommand(report, sha)
   if (!pick && !merge) return <div className="detail"><p>No pick or merge {sha.slice(0, 10)} in this report. <button onClick={onClose}>close</button></p></div>
@@ -20,10 +22,21 @@ export function Detail({ report, sha, lanes, onClose }: { report: Report, sha: s
     <div className="detail">
       <div className="detail-close"><button onClick={onClose} aria-label="close">×</button></div>
       {pick ? <PickHead p={pick} lanes={lanes} /> : <MergeHead m={merge} lanes={lanes} />}
-      {cmd && <div className="cmd"><code>{cmd}</code><Copy text={cmd} /></div>}
+      {cmd && (
+        <div className="cmd">
+          <code>{cmd}</code><Copy text={cmd} />
+          {onCompare && <button onClick={() => onCompare(...itemRanges(pick, merge))}>compare (all files, full diffs)</button>}
+        </div>
+      )}
       <Files files={(pick ?? merge).files} counts={merge?.counts} refs={pick ? pickRefs(pick, lanes) : mergeRefs(merge, lanes)} />
     </div>
   )
+}
+
+// The two ranges an item compares, as `git-didi patch` args
+function itemRanges(pick?: PickRec, merge?: MergeRec): [string, string] {
+  if (pick) return [`${pick.source}^..${pick.source}`, `${pick.commit}^..${pick.commit}`]
+  return [`${merge!.before.base}..${merge!.before.tip}`, `${merge!.after.base}..${merge!.after.tip}`]
 }
 
 const laneOf = (lanes: Record<string, Lane>, id: string): Lane => lanes[id] ?? { id, ref: id, label: id, color: '#888888' }
@@ -67,7 +80,7 @@ function MergeHead({ m, lanes }: { m: MergeRec, lanes: Record<string, Lane> }) {
   )
 }
 
-function Files({ files, counts, refs }: { files: FileRec[], counts?: Record<string, number>, refs: Refs }) {
+export function Files({ files, counts, refs }: { files: FileRec[], counts?: Record<string, number>, refs: Refs }) {
   const by = new Map<FileLabel, FileRec[]>()
   for (const f of files) by.set(f.label, [...by.get(f.label) ?? [], f])
   const equal = counts?.equal ?? 0

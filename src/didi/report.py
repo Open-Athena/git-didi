@@ -293,24 +293,33 @@ def pick_source_lane(graph: Graph, source: str) -> str:
     return graph.home(full) or graph.containing_ref(full) or 'dangling'
 
 
-def file_recs(files: list[FileResult]) -> list[dict]:
-    """Records of the non-equal files; those in `DIDI_LABELS` carry their diff of diffs, so the viewer needs no git.
+def file_recs(
+    files: list[FileResult],
+    labels: tuple[str, ...] = None,
+    file_lines: int = None,
+    item_lines: int = None,
+) -> list[dict]:
+    """Records of the non-equal files; those in `labels` (default `DIDI_LABELS`) carry their diff of diffs, so the viewer
+    needs no git.
 
     `didi` is the outer unified diff of the two `index`-normalized patches (no `---`/`+++` header). It's capped at
-    `MAX_FILE_DIDI_LINES` per file and `MAX_ITEM_DIDI_LINES` per pick/merge; `didi_lines` holds the full count when
+    `file_lines` per file and `item_lines` per pick/merge (defaults: `MAX_FILE_DIDI_LINES`, `MAX_ITEM_DIDI_LINES`);
+    `didi_lines` holds the full count when
     a file's `didi` is truncated (or omitted, once the item's budget is spent).
     """
+    labels = DIDI_LABELS if labels is None else labels
+    file_lines = MAX_FILE_DIDI_LINES if file_lines is None else file_lines
     recs = []
-    budget = MAX_ITEM_DIDI_LINES
+    budget = MAX_ITEM_DIDI_LINES if item_lines is None else item_lines
     for f in files:
         if f.status == 'equal':
             continue
         rec = f.to_json()
         rec['label'] = f.label
-        if rec['label'] in DIDI_LABELS:
+        if rec['label'] in labels:
             left, right = display_lines(f, 'index')
             didi = list(unified_diff(left, right, lineterm=''))[2:]
-            keep = min(len(didi), MAX_FILE_DIDI_LINES, budget)
+            keep = min(len(didi), file_lines, budget)
             if keep < len(didi):
                 rec['didi_lines'] = len(didi)
             rec['didi'] = didi[:keep]

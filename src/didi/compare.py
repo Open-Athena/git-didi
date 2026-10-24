@@ -44,11 +44,20 @@ class DiffOpts:
         return flags
 
 
+class GitError(SystemExit):
+    """A failed `git` command: exits 2 from the CLI; `git-didi serve` reports `stderr` instead."""
+
+    def __init__(self, args: tuple[str, ...], stderr: str):
+        super().__init__(2)
+        self.cmd = args
+        self.stderr = stderr
+
+
 def git(*args: str, input: Optional[str] = None) -> str:
     result = run([*GIT, *args], capture_output=True, text=True, input=input)
     if result.returncode != 0:
         err(f"git {' '.join(args)} failed: {result.stderr.strip()}")
-        sys.exit(2)
+        raise GitError(args, result.stderr.strip())
     return result.stdout
 
 

@@ -1,2 +1,4 @@
 # Generated at build time for PyPI releases
 src/didi/_build_info.py
+# Built web viewer, packaged for `git-didi serve` (from `www/dist`)
+src/didi/www_dist/
