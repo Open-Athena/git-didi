@@ -1,6 +1,6 @@
 # A web viewer for git-didi: branch lanes, pick/merge audits, diff-of-diffs in color
 
-**Status:** phases 1 (`report`), 2 (`www/` lanes + detail) 3 (pair tracks + own-delta trend) and 4 (`serve`) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phase 5 (disky) pending, in disky. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
+**Status:** done in git-didi 2026-10-23: phases 1 (`report`), 2 (`www/` lanes + detail), 3 (pair tracks + own-delta trend) and 4 (`serve`); see [Implementation notes](#implementation-notes). Phase 5 is handed off as specs in disky (`specs/didi-report-publish.md`) and disky-deep-dive (`specs/branches-from-git-didi-report.md`, including the appendix slide). Drafted 2026-10-24, from the disky session. Builds on [`delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
 
 ## Why
 
@@ -124,6 +124,12 @@ git-didi report -c didi.yml -s 2026-09-28 -o report.json
 - Packaging: the release workflow builds `www/` and copies `dist` to `src/didi/www_dist` (package data, git-ignored) before building the wheel; `find_www` falls back to the repo's `www/dist` for editable installs, or takes `-W`.
 - Tests: `tests/test_serve.py` (info/static fallback, `/api/patch` levels and errors, report cache + incremental refresh) on the fixture repo.
 
-[audit]: done/delta-invariance-audit.md
+### Phase 5 and open items
+
+- **Handed off**: disky `specs/didi-report-publish.md` (a `didi.yml` on `cloud`, `scripts/branch-harmony` reading the report, publishing `report.json` to a public R2 key, and two findings: merge `41c980dd`'s `Dockerfile`, and the merges with residuals at `-n tokens`); disky-deep-dive `specs/branches-from-git-didi-report.md` (the branch slide reads `report.json`; the appendix slide with pair tracks and the `Treemap.tsx` detail).
+- **Pages**: the workflow is in place, but the repo's Pages source must be set to "GitHub Actions" once before the first deploy. Until a project publishes a report, the page opens on its landing form.
+- **Open, unchanged**: "suggested pairs" for `tokens`-equal commits without a trailer or patch-id match (only patch-id pairs are made); the AST level; whether the deck imports the lanes component. New: duplicates (files in ≥ 2 siblings' own deltas) and lag, which disky's audit wants and the report doesn't carry.
+
+[audit]: delta-invariance-audit.md
 [gitdag]: https://github.com/Open-Athena/ddd/blob/main/react/GitDag.tsx
 [GitDag]: https://github.com/Open-Athena/ddd/blob/main/react/GitDag.tsx
