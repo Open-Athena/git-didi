@@ -32,10 +32,17 @@ export type MergeRec = {
   sha: string, lane: string, from_lane: string, date: string, subject: string, class: MergeClass, ok: boolean,
   before: Side, after: Side, absorbed_commits: string[], counts: Record<string, number>, files: FileRec[],
 }
+export type PairRow = {
+  kind: 'own' | 'pick' | 'merge', sha: string, date: string, subject: string, dir?: 'down' | 'up', via?: 'trailer' | 'patch-id',
+  parent_sha?: string, class?: Class, files?: FileRec[], merge?: true, from_lane?: string, from_kind?: 'parent' | 'peer', n_in?: number,
+  surfaces?: string[], n_paths?: number,
+}
+export type Pair = { child: string, parent: string, rows: PairRow[] }
 export type Report = {
-  version: 1, generated: string, since: string | null,
+  version: 2, generated: string, since: string | null,
   options: { normalize: Level, unified: number, ignore_whitespace: boolean, find_renames: string | null, find_copies: string | null },
   lanes: ReportLane[], segments: Record<string, Segment[]>, picks: Record<string, PickRec>, merges: Record<string, MergeRec>,
+  pairs: Pair[],
 }
 
 // How loudly to draw an item: `quiet` = faithful, `soft` = equal once normalized, `loud` = differs

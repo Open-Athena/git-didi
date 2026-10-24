@@ -307,3 +307,58 @@ header {
   .didi-row { grid-template-columns: 14px 14px 34px 1fr; }
   .file { margin-left: 0; }
 }
+
+// views + pair tracks
+.views {
+  display: flex;
+  gap: 6px;
+  margin-top: 24px;
+  button.on { background: var(--fg); color: var(--bg); }
+}
+button.link { background: none; border: 0; padding: 0; color: var(--link); font-size: 11.5px; }
+.warn { color: var(--loud); }
+.pairs { margin-top: 12px; }
+.pair-tabs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  button.on { outline: 2px solid var(--link); }
+}
+.trend {
+  margin: 8px 0 16px;
+  .trend-head { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }
+  .seg button { font-size: 11px; padding: 0 6px; }
+  .seg button.on { background: var(--fg); color: var(--bg); }
+  .axis { fill: var(--muted); }
+  .trend-line { stroke: var(--muted); }
+  .trend-dot { cursor: pointer; stroke: var(--bg); stroke-width: 1; }
+  .trend-dot.quiet { fill: var(--quiet); }
+  .trend-dot.soft { fill: var(--soft); }
+  .trend-dot.loud { fill: var(--loud); }
+}
+.tracks {
+  font-size: 13px;
+  .track-head, .track-row { display: grid; grid-template-columns: 90px 150px 1fr; gap: 8px; align-items: baseline; }
+  .track-head { font-weight: 600; padding: 4px 0; border-bottom: 1px solid var(--border); }
+  .track-row { padding: 3px 0; }
+  .track-l { text-align: right; }
+  .track-c { display: flex; gap: 4px; align-items: center; justify-content: center; }
+  .track-r { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; min-width: 0; }
+  .time { font-size: 11px; }
+  .surfaces { font-size: 11px; font-family: var(--mono); }
+  .via { font-size: 10.5px; }
+  .clickable-subject { cursor: pointer; &:hover { text-decoration: underline; } }
+  .track-row.merge { color: var(--muted); }
+  .band { border-left: 3px solid var(--quiet); margin: 4px 0; padding-left: 6px; }
+  .band.own { border-left-color: var(--muted); }
+  .band-head { background: none; border: 0; padding: 3px 0; text-align: left; }
+  .caret { display: inline-block; width: 12px; }
+  .group-open { border-left: 3px solid var(--loud); margin: 4px 0; padding-left: 6px; }
+  .track-files { margin-left: 100px; }
+  .merge-note button { font-size: 11px; padding: 0 6px; }
+}
+@media (max-width: 640px) {
+  .tracks .track-head, .tracks .track-row { grid-template-columns: 60px 100px 1fr; }
+  .tracks .track-files { margin-left: 0; }
+}

@@ -1,8 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { stringParam, useUrlState } from 'use-prms'
 import { ClassChip, Sha, Subject } from './bits'
 import { Detail } from './Detail'
+import { PairTracks } from './PairTracks'
+import { useWidth } from './useWidth'
 import { GitDag, LaneChip, plural } from './GitDag'
 import { buildDag, tone, type Class, type Lane, type Report } from './report'
 
@@ -26,18 +28,6 @@ function useTheme(): [Theme, () => void, boolean] {
   return [theme, next, theme === 'dark' || (theme === 'auto' && sysDark)]
 }
 
-function useWidth<T extends HTMLElement>(): [React.RefObject<T | null>, number] {
-  const ref = useRef<T>(null)
-  const [w, setW] = useState(900)
-  useEffect(() => {
-    if (!ref.current) return
-    const ro = new ResizeObserver(([e]) => setW(e.contentRect.width))
-    ro.observe(ref.current)
-    return () => ro.disconnect()
-  }, [])
-  return [ref, w]
-}
-
 async function fetchReport(url: string): Promise<Report> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`${res.status} ${res.statusText} fetching ${url}`)
@@ -47,6 +37,7 @@ async function fetchReport(url: string): Promise<Report> {
 export function App() {
   const [url, setUrl] = useUrlState('r', stringParam())
   const [item, setItem] = useUrlState('item', stringParam())
+  const [pair, setPair] = useUrlState('pair', stringParam())
   const [dropped, setDropped] = useState<{ name: string, report: Report } | null>(null)
   const [dragging, setDragging] = useState(false)
   const [theme, nextTheme, dark] = useTheme()
@@ -71,7 +62,7 @@ export function App() {
       {!report ? (
         <Landing loading={q.isLoading} error={q.error?.message} onUrl={u => { setDropped(null); setUrl(u) }} onFile={load} />
       ) : (
-        <Loaded report={report} dark={dark} item={item} setItem={setItem} />
+        <Loaded report={report} dark={dark} item={item} setItem={setItem} pair={pair} setPair={setPair} />
       )}
     </div>
   )
@@ -94,7 +85,9 @@ function Landing({ loading, error, onUrl, onFile }: { loading: boolean, error?: 
   )
 }
 
-function Loaded({ report, dark, item, setItem }: { report: Report, dark: boolean, item: string | undefined, setItem: (s: string | undefined) => void }) {
+function Loaded({ report, dark, item, setItem, pair, setPair }: {
+  report: Report, dark: boolean, item: string | undefined, setItem: (s: string | undefined) => void, pair: string | undefined, setPair: (s: string | undefined) => void,
+}) {
   const dag = useMemo(() => buildDag(report), [report])
   const lanes = useMemo(() => Object.fromEntries(dag.lanes.map(l => [l.id, l])), [dag])
   const [ref, width] = useWidth<HTMLDivElement>()
@@ -107,7 +100,13 @@ function Loaded({ report, dark, item, setItem }: { report: Report, dark: boolean
         <GitDag dag={dag} width={width} dark={dark} onItem={setItem} />
       </section>
       {item && <Detail report={report} sha={item} lanes={lanes} onClose={() => setItem(undefined)} />}
-      <Audit report={report} lanes={lanes} onItem={setItem} />
+      <nav className="views">
+        <button className={!pair ? 'on' : undefined} onClick={() => setPair(undefined)}>Audit</button>
+        <button className={pair ? 'on' : undefined} onClick={() => setPair(pair ?? report.pairs[0]?.child)} disabled={!report.pairs?.length}>Pair tracks</button>
+      </nav>
+      {pair
+        ? <PairTracks report={report} child={pair.split(',')[0]} lanes={lanes} onItem={setItem} onPair={setPair} />
+        : <Audit report={report} lanes={lanes} onItem={setItem} onPair={setPair} />}
     </>
   )
 }
@@ -119,7 +118,7 @@ function counts(cs: Class[]): ReactNode {
 }
 
 // Per lane: picks received and parent merges, by class; the non-equal ones listed, each opening its detail
-function Audit({ report, lanes, onItem }: { report: Report, lanes: Record<string, Lane>, onItem: (sha: string) => void }) {
+function Audit({ report, lanes, onItem, onPair }: { report: Report, lanes: Record<string, Lane>, onItem: (sha: string) => void, onPair: (child: string) => void }) {
   const picks = Object.values(report.picks), merges = Object.values(report.merges)
   return (
     <section className="audit">
@@ -134,7 +133,10 @@ function Audit({ report, lanes, onItem }: { report: Report, lanes: Record<string
               .filter(x => tone(x.cls) === 'loud').sort((a, b) => b.date.localeCompare(a.date))
             return (
               <tr key={l.name}>
-                <td><LaneChip l={lanes[l.name]} dark={false} /></td>
+                <td>
+                  <LaneChip l={lanes[l.name]} dark={false} />
+                  {l.parent && <div><button className="link" onClick={() => onPair(l.name)}>pair tracks ↔ {l.parent}</button></div>}
+                </td>
                 <td>{ps.length ? counts(ps.map(p => p.class)) : <span className="dim">none</span>}</td>
                 <td>{ms.length ? counts(ms.map(m => m.class)) : <span className="dim">none</span>}</td>
                 <td>

@@ -20,12 +20,14 @@ from .compare import (
     display_lines,
     git,
     merge_delta,
+    patch_ids,
     resolve_commits,
+    since_arg,
     trailer_source,
 )
 from .normalize import DEFAULT_LEVEL
 
-REPORT_VERSION = 1
+REPORT_VERSION = 2
 MAX_FILE_DIDI_LINES = 200
 MAX_ITEM_DIDI_LINES = 2000
 # Files whose residual the viewer shows as a diff of diffs; the others' label (line numbers / context only, one-sided,
@@ -215,7 +217,7 @@ def spine(graph: Graph, name: str, since: Optional[str]) -> list[str]:
     if lane.parent:
         revs.append(f'^{graph.tip(lane.parent)}')
     if since:
-        revs.insert(0, f'--since={since}')
+        revs.insert(0, since_arg(since))
     return rev_list(*revs)
 
 
@@ -322,6 +324,108 @@ def merge_class(files: list[FileResult]) -> str:
     return max(labels, key=MERGE_CLASS_ORDER.index, default='equal')
 
 
+def commit_paths(shas: list[str]) -> dict[str, list[str]]:
+    """Paths each commit touches (vs. its first parent), from one `git log` call."""
+    if not shas:
+        return {}
+    out = git('log', '--no-walk=unsorted', '--stdin', '--diff-merges=first-parent', '--name-only', '--format=%x00%H', input='\n'.join(shas) + '\n')
+    paths = {}
+    for chunk in out.split('\0')[1:]:
+        sha, _, body = chunk.partition('\n')
+        paths[sha] = [p for p in body.splitlines() if p]
+    return paths
+
+
+def surface_match(path: str, pattern: str) -> bool:
+    """A glob, or (with no glob characters) a path prefix: `site/src` matches `site/src/App.tsx`."""
+    if any(c in pattern for c in '*?['):
+        return fnmatch(path, pattern)
+    return path == pattern or path.startswith(pattern.rstrip('/') + '/')
+
+
+def surfaces_of(paths: list[str], surfaces: dict[str, list[str]]) -> list[str]:
+    """Names of the surfaces any of `paths` falls in (config order); `other` when some path falls in none."""
+    hit = [name for name, pats in surfaces.items() if any(surface_match(p, pat) for p in paths for pat in pats)]
+    if not surfaces or any(not any(surface_match(p, pat) for pats in surfaces.values() for pat in pats) for p in paths):
+        hit.append('other')
+    return hit
+
+
+def pair_tracks(
+    graph: Graph,
+    segs: dict[str, list[dict]],
+    picks: dict[str, dict],
+    spines: dict[str, list[str]],
+    opts: DiffOpts,
+    threshold: str,
+) -> list[dict]:
+    """Per (child, parent) lane pair: the child's first-parent commits as rows, each pick aligned with its source.
+
+    Rows (oldest first): `pick` (a pick from the parent, `dir: down`, or a child commit the parent picked, `dir: up`;
+    `via` a `-x` trailer, else equal `git patch-id --stable`), `merge` (a merge from the parent or a peer), and `own`
+    (unpaired: the child's intrinsic delta, tagged with the configured surfaces its paths touch).
+    """
+    out = []
+    for child, lane in graph.lanes.items():
+        parent = lane.parent
+        if not parent:
+            continue
+        rows: list[dict] = []
+        for s in segs[child]:
+            if s['kind'] == 'run':
+                for c in s['commits']:
+                    rows.append({'kind': 'own', 'sha': c['sha'], 'date': c['date'], 'subject': c['subject'], **({'merge': True} if c.get('merge') else {})})
+            elif s['kind'] == 'cp':
+                for item in s['picks']:
+                    if s['from_lane'] == parent:
+                        rows.append({'kind': 'pick', 'dir': 'down', 'via': 'trailer', 'sha': item['sha'], 'date': item['date'], 'subject': item['subject'], 'parent_sha': picks[item['sha']]['source'], 'class': item['class']})
+                    else:
+                        rows.append({'kind': 'own', 'sha': item['sha'], 'date': item['date'], 'subject': item['subject'], 'from_lane': s['from_lane'], 'class': item['class']})
+            else:
+                rows.append({k: s[k] for k in ('kind', 'sha', 'date', 'subject', 'from_lane', 'from_kind', 'n_in') if k in s} | ({'class': s['class']} if 'class' in s else {}))
+        by_sha = {r['sha']: r for r in rows}
+
+        # Up: parent commits picked from this child (by trailer)
+        for s in segs[parent]:
+            if s['kind'] != 'cp' or s['from_lane'] != child:
+                continue
+            for item in s['picks']:
+                src = picks[item['sha']]['source']
+                r = by_sha.get(src)
+                if r and r['kind'] == 'own' and not r.get('merge'):
+                    r.update(kind='pick', dir='up', via='trailer', parent_sha=item['sha'], **{'class': item['class']})
+
+        # Patch-id: unpaired own commits equal to an (unpaired) parent spine commit
+        own = [r['sha'] for r in rows if r['kind'] == 'own' and not r.get('merge') and 'from_lane' not in r]
+        paired = {r['parent_sha'] for r in rows if r['kind'] == 'pick'}
+        parent_commits = [c for c in spines[parent] if len(graph.meta[c].parents) == 1 and c not in paired]
+        if own and parent_commits:
+            own_pids = patch_ids(['--no-walk=unsorted', *own], opts)
+            parent_by_pid: dict[str, str] = {}
+            for c, pid in patch_ids(['--no-walk=unsorted', *parent_commits], opts).items():
+                parent_by_pid.setdefault(pid, c)
+            matches = [(sha, parent_by_pid[pid]) for sha, pid in own_pids.items() if pid in parent_by_pid]
+            for r in classify_picks([Pick(sha, '', p, p) for sha, p in matches], opts, threshold):
+                row = by_sha[r.pick.commit]
+                # Direction: whichever side committed first is the source
+                up = graph.meta[row['sha']].date <= graph.meta[r.pick.source].date
+                row.update(kind='pick', dir='up' if up else 'down', via='patch-id', parent_sha=r.pick.source, **{'class': r.cls})
+                files = file_recs(r.files)
+                if files:
+                    row['files'] = files
+
+        # Surfaces of the intrinsic delta
+        if lane.surfaces:
+            own_rows = [r for r in rows if r['kind'] == 'own']
+            paths = commit_paths([r['sha'] for r in own_rows])
+            for r in own_rows:
+                ps = paths.get(r['sha'], [])
+                r['surfaces'] = surfaces_of(ps, lane.surfaces)
+                r['n_paths'] = len(ps)
+        out.append({'child': child, 'parent': parent, 'rows': rows})
+    return out
+
+
 def options_key(opts: DiffOpts, threshold: str) -> dict:
     return {
         'normalize': threshold,
@@ -405,6 +509,9 @@ def build_report(
                 for item in s['picks']:
                     item['class'] = picks[item['sha']]['class']
 
+    pairs = pair_tracks(graph, segs, picks, spines, opts, threshold)
+    log(f"pairs: {len(pairs)} lane pair(s)")
+
     lanes = []
     for name, lane in graph.lanes.items():
         rec = lane.to_json()
@@ -428,5 +535,6 @@ def build_report(
         'segments': segs,
         'picks': picks,
         'merges': merges,
+        'pairs': pairs,
     }
 

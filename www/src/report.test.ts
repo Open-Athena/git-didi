@@ -5,7 +5,7 @@ const sha = (c: string) => c.repeat(40)
 
 // Two lanes: `main`, and `dep` forked from it on Oct 2, receiving a merge and two picks (one equal, one differing)
 const REPORT: Report = {
-  version: 1, generated: '2026-10-05T00:00:00+00:00', since: '2026-10-01',
+  version: 2, generated: '2026-10-05T00:00:00+00:00', since: '2026-10-01',
   options: { normalize: 'index', unified: 3, ignore_whitespace: false, find_renames: null, find_copies: null },
   lanes: [
     { name: 'main', ref: 'main', head: sha('a'), head_date: '2026-10-03T10:00:00+00:00', commits: 12, color: '#5b5b5b' },
@@ -34,6 +34,7 @@ const REPORT: Report = {
   },
   picks: {},
   merges: {},
+  pairs: [],
 }
 
 describe('buildDag', () => {

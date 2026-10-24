@@ -6,7 +6,7 @@ import { itemCommand, type FileLabel, type FileRec, type Lane, type MergeRec, ty
 
 // What a file's lines link to on GitHub: per side, the commits holding its pre- and post-image
 type SideRefs = { repo?: string, pre?: string, post: string }
-type Refs = { left: SideRefs, right: SideRefs }
+export type Refs = { left: SideRefs, right: SideRefs }
 
 // Group order: real differences first (open), explained ones after (folded)
 const GROUPS: FileLabel[] = ['differs', 'left-only', 'right-only', 'equal@tokens', 'equal@ws', 'equal@context', 'equal@lines', 'adopted', 'absorbed']
@@ -76,7 +76,7 @@ function Files({ files, counts, refs }: { files: FileRec[], counts?: Record<stri
       {GROUPS.filter(g => by.has(g)).map(g => (
         <details key={g} open={OPEN.has(g)} className="group">
           <summary><ClassChip c={g} /> {plural(by.get(g)!.length, 'file')}</summary>
-          {by.get(g)!.map(f => <File key={f.path} f={f} refs={refs} />)}
+          {by.get(g)!.map(f => <DidiFile key={f.path} f={f} refs={refs} />)}
         </details>
       ))}
       {equal > 0 && <div className="group equal-count"><ClassChip c="equal" /> {plural(equal, 'file')} (identical patches, not listed)</div>}
@@ -85,7 +85,7 @@ function Files({ files, counts, refs }: { files: FileRec[], counts?: Record<stri
   )
 }
 
-function File({ f, refs }: { f: FileRec, refs: Refs }) {
+export function DidiFile({ f, refs }: { f: FileRec, refs: Refs }) {
   const rows = useMemo(() => f.didi ? parseDidi(f.didi) : null, [f.didi])
   const blob = refs.right.repo && f.status !== 'left-only' ? `${refs.right.repo}/blob/${refs.right.post}/${f.path}` : undefined
   return (

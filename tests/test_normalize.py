@@ -164,3 +164,12 @@ def test_split_patch():
 
 def test_patch_paths_rename():
     assert patch_paths(split_patch(MULTI)['new name.py'].split('\n')) == ('old name.py', 'new name.py')
+
+
+def test_since_arg():
+    from didi.compare import since_arg
+    assert [since_arg(s) for s in ('2026-09-28', '2.weeks.ago', '2026-09-28 12:00')] == [
+        '--since=2026-09-28 00:00:00',
+        '--since=2.weeks.ago',
+        '--since=2026-09-28 12:00',
+    ]

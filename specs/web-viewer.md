@@ -1,6 +1,6 @@
 # A web viewer for git-didi: branch lanes, pick/merge audits, diff-of-diffs in color
 
-**Status:** phases 1 (`report`) and 2 (`www/` lanes + detail) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phases 3–5 pending. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
+**Status:** phases 1 (`report`), 2 (`www/` lanes + detail) and 3 (pair tracks + own-delta trend) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phases 4–5 pending. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
 
 ## Why
 
@@ -109,6 +109,13 @@ git-didi report -c didi.yml -s 2026-09-28 -o report.json
 - **Audit table**: per lane, picks received and parent merges counted by class, plus the list of loud items (newest first), each opening its detail.
 - **Tests**: vitest for `parseDidi` (gutters, line numbers, both highlight kinds) and `buildDag` (binning, link classes, prelude). Verified in Chrome against disky's report, in both themes.
 - **Pages**: `.github/workflows/pages.yml` builds, tests and deploys `www/` on pushes to `main` touching it. The repo's Pages source must be set to "GitHub Actions" once (`gh api -X POST repos/runsascoded/git-didi/pages -f build_type=workflow`). Not yet in the bundle: a sample report, so the published page opens on its landing form.
+
+### Phase 3: pair tracks and the own-delta trend
+
+- **Report** (`pairs`, `REPORT_VERSION` 2): per (child, parent) lane pair, the child's first-parent commits as rows, oldest first: `pick` (`dir: down`, a trailer pick from the parent; `dir: up`, a child commit the parent picked by trailer; or, for unpaired child commits whose `git patch-id --stable` equals an unpaired parent spine commit's, `via: patch-id`, direction by which side committed first, classified like a pick, with non-equal `files` on the row since there's no pick record), `merge` (with its class), and `own` (unpaired: the intrinsic delta; picks from other lanes stay `own` with `from_lane`). Own rows get `surfaces` (names of the lane's configured surfaces their paths touch, plus `other` for paths in none) and `n_paths`. Rows are recomputed on every run, `-p` or not (patch-ids are cheap: about 5s for disky's 7 pairs).
+- **Surfaces**: generalized from the draft's `{intrinsic: [globs], parity: [globs]}` to any `{name: [patterns]}`; a pattern without glob characters is a path prefix (`site/src` matches `site/src/App.tsx`), and a surface named `parity` flags the commit in the viewer. disky's deployment lanes use `config` / `migrations` / `deploy` / `docs` / `parity` (`cp.yml`'s shared-code dirs).
+- **Viewer** (`PairTracks.tsx`, `?pair=<child>` or `?pair=<child>,<parent>`, an Audit / Pair tracks switch under the lanes): a summary line (merges, picks each way, patch-id pairs, intrinsic commits, parity hits); the trend (own delta's changed lines or files, before → after at each merge: drops are what the merge absorbed, rises are new own work; dots coloured by the merge's tone, opening its detail); and the tracks: parent-side SHA | arrow + class | child commit. Consecutive pairs with an empty residual at their level (`equal`, `equal@lines/context/ws`, `absorbed`, `adopted`) collapse into a band ("2 picks, 2 merges, empty residual (4 equal)"); others stay open with their didi files (picks) or a residual summary + "open" (merges); runs of own commits collapse into "N intrinsic commits · deploy 8, docs 5, …", with parity-touching ones listed even when collapsed (⚠).
+- **Fix found on the way**: `--since=YYYY-MM-DD` is git approxidate for that date *at the current time of day*, so a run late in the day dropped that day's earlier commits (36 on `gcs`'s first day). `since_arg` pins bare dates to midnight, for `report` and `picks -s` alike; the earlier disky numbers in [audit] were computed with the bug.
 
 [audit]: done/delta-invariance-audit.md
 [gitdag]: https://github.com/Open-Athena/ddd/blob/main/react/GitDag.tsx

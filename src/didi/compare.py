@@ -224,11 +224,20 @@ def trailer_source(body: str) -> Optional[str]:
     return sources[-1] if sources else None
 
 
+DATE_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
+
+
+def since_arg(since: str) -> str:
+    """`--since=…`, pinning a bare `YYYY-MM-DD` to midnight (git's approxidate otherwise reads it as that date at the
+    current time of day, silently dropping that day's earlier commits)."""
+    return f'--since={since} 00:00:00' if DATE_RE.match(since) else f'--since={since}'
+
+
 def log_bodies(*revs: str, since: Optional[str] = None, grep: Optional[str] = None) -> list[tuple[str, str, str]]:
     """(sha, subject, body) for each commit in `revs`."""
     cmd = ['log', '--format=%H%x00%s%x00%B%x01']
     if since:
-        cmd.append(f'--since={since}')
+        cmd.append(since_arg(since))
     if grep:
         cmd.extend(['-F', f'--grep={grep}'])
     out = git(*cmd, *revs, '--')

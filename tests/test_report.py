@@ -29,6 +29,7 @@ def report(repo, tmp_path):
     assert result.stderr.split('\n') == [
         'picks: 0 reused, 4 to classify',
         'merges: 0 reused, 1 to check',
+        'pairs: 1 lane pair(s)',
         f'Wrote {out}: 2 lanes, 4 picks, 1 merges',
         '',
     ]
@@ -110,6 +111,22 @@ def test_report_picks_and_merges(report):
         '+-function f(a, b, c) {',
         '++function f(a, b, c, staged = true) {',
         '  }',
+    ]
+
+
+def test_report_pairs(report):
+    r, [pair] = report['repo'], report['data']['pairs']
+    assert (pair['child'], pair['parent']) == ('gcs', 'cloud')
+    shape = lambda row: tuple(row.get(k) for k in ('kind', 'sha', 'dir', 'via', 'parent_sha', 'class', 'surfaces'))
+    assert [shape(row) for row in pair['rows']] == [
+        ('pick', r['g1'], 'up', 'trailer', r['c2'], 'equal@lines', None),  # cloud picked g1 as c2
+        ('own', r['g2'], None, None, None, None, ['other']),  # cloud copied adopt.md in a bigger commit: no patch-id match
+        ('own', r['g3'], None, None, None, None, ['intrinsic']),
+        ('own', r['g4'], None, None, None, None, ['other']),
+        ('pick', r['g5'], 'down', 'trailer', r['c5'], 'equal', None),
+        ('pick', r['g6'], 'down', 'trailer', r['c6'], 'files-differ', None),
+        ('own', r['g7'], None, None, None, 'missing', ['other']),
+        ('merge', r['merge'], None, None, None, 'equal@tokens', None),
     ]
 
 
