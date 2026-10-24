@@ -120,6 +120,26 @@ A child's own delta is `merge-base(child, parent)..child`. Merging the parent le
 
 Prints each delta's size before and after, and a `git-didi patch …` command to inspect what differs.
 
+#### `report` - Build a JSON bundle for the web viewer
+
+```bash
+git-didi report -c didi.yml -s 2026-09-28 -o report.json
+git-didi report -p report.json -o report.json   # incremental: reuse records of unchanged picks/merges
+```
+
+`didi.yml` names the long-lived branches ("lanes") and their parents:
+
+```yaml
+since: 2026-09-28
+repo_url: https://github.com/org/repo   # lanes' default
+ignore_branches: [worktree-agent-*]     # never used to name a commit's branch
+lanes:
+  main: {label: base, color: '#5b5b5b'}
+  deploy-a: {parent: main, color: '#4285f4', aliases: [old-name]}
+```
+
+(A `/cp` skill `.claude/cp.yml` also works: its first branch is the root, the rest its children.) The report holds each lane's first-parent history as segments (runs of own commits, merges from its parent or peers, groups of cherry-picks), every pick's `picks` record, and every parent merge's `merge` record (classed by its worst file). Files whose residual isn't explained by their label carry their diff of diffs, so the viewer needs no git. Schema: [`www/schema.json`](www/schema.json).
+
 #### Exit codes
 
 `patch`, `stat`, `picks`, `merge`, and `delta` exit 1 when they find differences (at the `-n` level), 2 on errors, 0 otherwise.

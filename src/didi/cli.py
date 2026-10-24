@@ -81,6 +81,7 @@ from .diff import (
 )
 from .normalize import DEFAULT_LEVEL, LEVELS
 from .pager import Pager
+from .report import build_report, load_config
 
 
 # Common option decorators
@@ -885,6 +886,70 @@ def merge(
         result.label = f'{sha[:10]} {subject}'
         results.append(result)
     report_deltas(results, json_out, verbose)
+
+
+@cli.command()
+@opt('-c', '--config', default='didi.yml', help='Lanes config: `didi.yml` (`lanes: {name: {parent, …}}`) or a `/cp` `.claude/cp.yml` (default: didi.yml)')
+@opt('-C', '--find-copies', type=str, metavar='[<n>]', help='Detect copies as well as renames (similarity threshold, e.g., 50% or 0.5)')
+@opt('-j', '--jobs', type=int, default=8, help='Merges to check in parallel (default: 8)')
+@opt('-M', '--find-renames', type=str, metavar='[<n>]', help='Detect renames (similarity threshold, e.g., 50% or 0.5)')
+@normalize_opt
+@opt('-o', '--output', default='-', help='Output path (default: stdout)')
+@opt('-p', '--previous', help='Previous report: reuse its pick/merge records for unchanged commits (when options match)')
+@opt('-s', '--since', help='Only commits since this date (`git log --since`; default: the config\'s `since`)')
+@opt('-U', '--unified', type=int, default=3, help='Number of context lines in compared patches (default: 3)')
+@flag('-w', '--ignore-whitespace', help='Pass -w to git diff commands to ignore whitespace')
+def report(
+    config: str,
+    find_copies: str,
+    jobs: int,
+    find_renames: str,
+    normalize_level: str,
+    output: str,
+    previous: str,
+    since: str,
+    unified: int,
+    ignore_whitespace: bool,
+) -> None:
+    """Write a JSON report of lanes, segments, picks, and merges, for the web viewer.
+
+    Lanes come from the config; each lane's first-parent history (since -s)
+    becomes segments: runs of its own commits, merges from its parent or peers,
+    and groups of cherry-picks. Every pick gets its `picks` class, and every
+    parent merge its `merge` own-delta check (class = its worst file). Non-equal
+    files carry their patch pair, so the viewer needs no git. Schema:
+    www/schema.json.
+
+    \b
+    Examples:
+        git-didi report -s 2026-09-28 -o report.json
+        git-didi report -p report.json -o report.json   # incremental
+    """
+    try:
+        cfg = load_config(config)
+    except (OSError, ValueError) as e:
+        err(str(e))
+        sys.exit(2)
+    prev = None
+    if previous:
+        try:
+            with open(previous) as f:
+                prev = json.load(f)
+        except FileNotFoundError:
+            err(f"No previous report at {previous}; building from scratch")
+    opts = DiffOpts(ignore_whitespace, unified, find_renames, find_copies)
+    try:
+        data = build_report(cfg, since, opts, normalize_level, prev, jobs, log=err)
+    except ValueError as e:
+        err(str(e))
+        sys.exit(2)
+    text = json.dumps(data, separators=(',', ':')) + '\n'
+    if output == '-':
+        sys.stdout.write(text)
+    else:
+        with open(output, 'w') as f:
+            f.write(text)
+        err(f"Wrote {output}: {len(data['lanes'])} lanes, {len(data['picks'])} picks, {len(data['merges'])} merges")
 
 
 if __name__ == '__main__':

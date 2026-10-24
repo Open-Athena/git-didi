@@ -1,0 +1,203 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://runsascoded.github.io/git-didi/schema.json",
+  "title": "git-didi report",
+  "description": "Output of `git-didi report`: lanes (long-lived branches), their first-parent segments, and audited cherry-picks and merges.",
+  "type": "object",
+  "required": ["version", "generated", "since", "options", "lanes", "segments", "picks", "merges"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {"const": 1},
+    "generated": {"type": "string", "format": "date-time"},
+    "since": {"type": ["string", "null"], "description": "`git log --since` bound on every lane's segments"},
+    "options": {
+      "type": "object",
+      "required": ["normalize", "unified", "ignore_whitespace", "find_renames", "find_copies"],
+      "additionalProperties": false,
+      "properties": {
+        "normalize": {"$ref": "#/$defs/level"},
+        "unified": {"type": "integer"},
+        "ignore_whitespace": {"type": "boolean"},
+        "find_renames": {"type": ["string", "null"]},
+        "find_copies": {"type": ["string", "null"]}
+      }
+    },
+    "lanes": {"type": "array", "items": {"$ref": "#/$defs/lane"}},
+    "segments": {
+      "type": "object",
+      "description": "Lane name → its first-parent history, oldest first",
+      "additionalProperties": {"type": "array", "items": {"$ref": "#/$defs/segment"}}
+    },
+    "picks": {"type": "object", "description": "Pick commit SHA → its `picks` record", "additionalProperties": {"$ref": "#/$defs/pick"}},
+    "merges": {"type": "object", "description": "Merge commit SHA → its own-delta check (parent merges only)", "additionalProperties": {"$ref": "#/$defs/merge"}}
+  },
+  "$defs": {
+    "sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "date": {"type": "string", "description": "Committer date, ISO 8601 with offset"},
+    "level": {"enum": ["none", "index", "lines", "context", "ws", "tokens"]},
+    "fileLabel": {"enum": ["equal", "equal@lines", "equal@context", "equal@ws", "equal@tokens", "differs", "left-only", "right-only", "absorbed", "adopted"]},
+    "pickClass": {"enum": ["equal", "equal@lines", "equal@context", "equal@ws", "equal@tokens", "differs", "files-differ", "missing"]},
+    "mergeClass": {"enum": ["equal", "absorbed", "adopted", "equal@lines", "equal@context", "equal@ws", "equal@tokens", "differs"]},
+    "lane": {
+      "type": "object",
+      "required": ["name", "ref", "head", "head_date", "commits"],
+      "additionalProperties": false,
+      "properties": {
+        "name": {"type": "string"},
+        "ref": {"type": "string", "description": "Live branch: the name, else the first existing alias"},
+        "parent": {"type": "string"},
+        "label": {"type": "string"},
+        "color": {"type": "string"},
+        "repo_url": {"type": "string"},
+        "aliases": {"type": "array", "items": {"type": "string"}},
+        "surfaces": {"type": "object", "additionalProperties": {"type": "array", "items": {"type": "string"}}},
+        "head": {"$ref": "#/$defs/sha"},
+        "head_date": {"$ref": "#/$defs/date"},
+        "commits": {"type": "integer", "description": "Commits reachable from the head"},
+        "ahead": {"type": "integer", "description": "Own commits (not in the parent)"},
+        "behind": {"type": "integer", "description": "Parent commits not in this lane"},
+        "fork_date": {"type": ["string", "null"], "description": "Earliest own commit's date"}
+      }
+    },
+    "commit": {
+      "type": "object",
+      "required": ["sha", "date", "subject"],
+      "additionalProperties": false,
+      "properties": {
+        "sha": {"$ref": "#/$defs/sha"},
+        "date": {"$ref": "#/$defs/date"},
+        "subject": {"type": "string"},
+        "merge": {"const": true, "description": "A feature-branch merge folded into the run"}
+      }
+    },
+    "segment": {
+      "oneOf": [
+        {
+          "type": "object",
+          "description": "Consecutive own commits (feature-branch merges folded in)",
+          "required": ["kind", "n", "first_date", "last_date", "commits", "feature_merges", "side_commits"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "run"},
+            "n": {"type": "integer"},
+            "first_date": {"$ref": "#/$defs/date"},
+            "last_date": {"$ref": "#/$defs/date"},
+            "commits": {"type": "array", "items": {"$ref": "#/$defs/commit"}},
+            "feature_merges": {"type": "object", "additionalProperties": {"type": "integer"}, "description": "Feature branch → merges of it"},
+            "side_commits": {"type": "integer", "description": "Commits brought in by the feature merges"}
+          }
+        },
+        {
+          "type": "object",
+          "description": "A merge from the lane's parent or a peer lane",
+          "required": ["kind", "sha", "date", "from_lane", "from_kind", "subject", "n_in"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "merge"},
+            "sha": {"$ref": "#/$defs/sha"},
+            "date": {"$ref": "#/$defs/date"},
+            "from_lane": {"type": "string"},
+            "from_kind": {"enum": ["parent", "peer"]},
+            "subject": {"type": "string"},
+            "n_in": {"type": "integer", "description": "Commits the merge brings in"},
+            "class": {"$ref": "#/$defs/mergeClass", "description": "Parent merges only: `merges[sha].class`"}
+          }
+        },
+        {
+          "type": "object",
+          "description": "Consecutive cherry-picks from one source lane (or branch)",
+          "required": ["kind", "date", "last_date", "from_lane", "n", "picks"],
+          "additionalProperties": false,
+          "properties": {
+            "kind": {"const": "cp"},
+            "date": {"$ref": "#/$defs/date"},
+            "last_date": {"$ref": "#/$defs/date"},
+            "from_lane": {"type": "string", "description": "Source's lane, else a containing branch, else `dangling` / `missing`"},
+            "n": {"type": "integer"},
+            "picks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["sha", "date", "source", "subject", "class"],
+                "additionalProperties": false,
+                "properties": {
+                  "sha": {"$ref": "#/$defs/sha"},
+                  "date": {"$ref": "#/$defs/date"},
+                  "source": {"type": "string", "description": "SHA as written in the `-x` trailer"},
+                  "subject": {"type": "string"},
+                  "class": {"$ref": "#/$defs/pickClass"}
+                }
+              }
+            }
+          }
+        }
+      ]
+    },
+    "file": {
+      "type": "object",
+      "required": ["path", "status", "level", "left_lines", "right_lines", "label"],
+      "additionalProperties": false,
+      "properties": {
+        "path": {"type": "string"},
+        "left_path": {"type": "string"},
+        "status": {"enum": ["differs", "left-only", "right-only", "absorbed", "adopted"]},
+        "level": {"oneOf": [{"$ref": "#/$defs/level"}, {"type": "null"}], "description": "Least-lenient level at which both sides are equal"},
+        "label": {"$ref": "#/$defs/fileLabel"},
+        "left_lines": {"type": "integer"},
+        "right_lines": {"type": "integer"},
+        "residual_lines": {"type": "integer"},
+        "absorbed_lines": {"type": "integer"},
+        "didi": {"type": "array", "items": {"type": "string"}, "description": "Diff of the two index-normalized patches (`differs`, `equal@ws`, `equal@tokens` only), from its first `@@`"},
+        "didi_lines": {"type": "integer", "description": "Full `didi` length, when truncated or omitted"}
+      }
+    },
+    "pick": {
+      "type": "object",
+      "required": ["commit", "subject", "source", "class", "level", "ok", "files", "lane", "from_lane", "date"],
+      "additionalProperties": false,
+      "properties": {
+        "commit": {"$ref": "#/$defs/sha"},
+        "subject": {"type": "string"},
+        "source": {"type": "string", "description": "Resolved source SHA, or the trailer's text when missing"},
+        "class": {"$ref": "#/$defs/pickClass"},
+        "level": {"oneOf": [{"$ref": "#/$defs/level"}, {"type": "null"}]},
+        "ok": {"type": "boolean", "description": "Equal at the report's `options.normalize` (missing sources count as ok)"},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}},
+        "lane": {"type": "string"},
+        "from_lane": {"type": "string"},
+        "date": {"$ref": "#/$defs/date"}
+      }
+    },
+    "side": {
+      "type": "object",
+      "required": ["base", "tip", "files", "added", "removed"],
+      "additionalProperties": false,
+      "properties": {
+        "base": {"$ref": "#/$defs/sha"},
+        "tip": {"$ref": "#/$defs/sha"},
+        "files": {"type": "integer"},
+        "added": {"type": "integer"},
+        "removed": {"type": "integer"}
+      }
+    },
+    "merge": {
+      "type": "object",
+      "required": ["sha", "lane", "from_lane", "date", "subject", "class", "ok", "before", "after", "absorbed_commits", "counts", "files"],
+      "additionalProperties": false,
+      "properties": {
+        "sha": {"$ref": "#/$defs/sha"},
+        "lane": {"type": "string"},
+        "from_lane": {"type": "string"},
+        "date": {"$ref": "#/$defs/date"},
+        "subject": {"type": "string"},
+        "class": {"$ref": "#/$defs/mergeClass", "description": "Worst file label (`left-only`/`right-only` count as `differs`)"},
+        "ok": {"type": "boolean", "description": "Every file equal (at `options.normalize`), absorbed, or adopted"},
+        "before": {"$ref": "#/$defs/side", "description": "mb(M^1, M^2)..M^1"},
+        "after": {"$ref": "#/$defs/side", "description": "M^2..M"},
+        "absorbed_commits": {"type": "array", "items": {"$ref": "#/$defs/sha"}},
+        "counts": {"type": "object", "additionalProperties": {"type": "integer"}, "description": "File label → count, including equal files"},
+        "files": {"type": "array", "items": {"$ref": "#/$defs/file"}, "description": "Non-equal files only"}
+      }
+    }
+  }
+}

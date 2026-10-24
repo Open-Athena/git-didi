@@ -1,6 +1,6 @@
 # A web viewer for git-didi: branch lanes, pick/merge audits, diff-of-diffs in color
 
-**Status:** draft, 2026-10-24, from the disky session. Nothing implemented. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
+**Status:** phase 1 (`report`) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phases 2–5 pending. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
 
 ## Why
 
@@ -65,20 +65,21 @@ git-didi report -c didi.yml -s 2026-09-28 -o report.json
   - `?pair=gcs,cloud`, `?item=<sha>`: deep links via `use-prms`.
   - The lanes component is ported from the deck's `GitDag.tsx`.
 - **`git-didi serve [-c didi.yml]`** runs it locally against the current repo: it builds the report on demand, and adds one local endpoint for arbitrary `patch A..B C..D`. §3 then works for any ranges, not only the report's items. That's the "browse / diff / didi any branches" mode, and it's local only, since it needs the repo.
-- Published at `runsascoded.github.io/git-didi`. A project hosts its own report anywhere CORS-readable and links `…/git-didi/?r=<its url>`.
+- **Demo at `didi.oa.dev`** (leaning OA, since most of the driving work is OA's disky; `didi.rbw.sh` the alternative): a Cloudflare Pages site serving the viewer, with disky's report as its default `?r=`. Any other project hosts its own report anywhere CORS-readable and links `didi.oa.dev/?r=<its url>`.
+  - **Setup:** a Pages project + the `didi` CNAME in OA's Cloudflare account, as Pulumi beside disky's `cf/` stacks, plus the report's public R2 key. The apply needs Ryan's go, as all infra does.
 
 ## disky as the first consumer
 
-- disky's `specs/branch-harmony-audit.md` (draft, local to `~/c/disky`, not yet committed) already plans `scripts/branch-harmony` on `cloud`, running `merge`/`picks` per pair after every merge and pick. It would run `git-didi report -p` and upload `report.json` to a public R2 key. The repo is public, so branch metadata is too. It's refreshed by the `/cp` skill's last step and a nightly GHA.
+- disky's `specs/branch-harmony-audit.md` (draft, local to `~/c/disky`, not yet committed) already plans `scripts/branch-harmony` on `cloud`, running `merge`/`picks` per pair after every merge and pick. It would run `git-didi report -p` and upload `report.json` to the public R2 key `didi.oa.dev` reads. The repo is public, so branch metadata is too. It's refreshed by the `/cp` skill's last step and a nightly GHA.
 - **The deck:**
   - the branch slide gets the per-arrow classes (§1) from the same report;
-  - a new slide or appendix, "disky – picks and merges, audited", shows the `gcs` ↔ `cloud` pair tracks (§2) with one expanded non-equal item (§3), and links to the live viewer.
+  - a new slide or appendix, "disky – picks and merges, audited", shows the `gcs` ↔ `cloud` pair tracks (§2) with one expanded non-equal item (§3), and links to `didi.oa.dev`.
 - **Not in disky's `site/`.** That's the storage-usage product. Every deployment ships its full feature set (parity by default), so a dev-process page there would reach gcs.oa.dev, cw.oa.dev, etc., and couple the product to its own repo's history. The viewer belongs to git-didi; disky publishes data for it.
 
 ## Phases
 
 1. `report` (lanes + segments + picks + merges, incremental) with a schema and tests on the fixture repo. The deck switches `branches.py` → `git-didi report`.
-2. `www/`: lanes with classes (§1) and the detail view (§3) for report items. GH Pages.
+2. `www/`: lanes with classes (§1) and the detail view (§3) for report items, deployed to `didi.oa.dev` with disky's report.
 3. Pair tracks (§2) and the own-delta trend.
 4. `serve`, for arbitrary ranges locally.
 5. disky: `scripts/branch-harmony` publishes the report; the deck slide or appendix.
@@ -88,6 +89,17 @@ git-didi report -c didi.yml -s 2026-09-28 -o report.json
 - Pairing beyond trailers: `patch-id` pairs re-applied picks that lost their trailer. Should `tokens`-equal commits pair too (adapted picks without `-x`)? Probably as "suggested pairs", shown dashed.
 - AST level (tree-sitter), deferred in [audit]: the detail view is where it would pay off (e.g. "added parameter `x`" instead of a token script).
 - Whether the deck should import the viewer's lanes component (a `pds`-managed dep) or keep its own copy reading the shared schema.
+
+## Implementation notes
+
+### Phase 1: `report` (`src/didi/report.py`, `tests/test_report.py`, `www/schema.json`)
+
+- **Config**: `didi.yml` is `lanes: {name: {parent, label, color, repo_url, aliases, surfaces}}` plus top-level `since`, `repo_url` (lanes' default) and `ignore_branches` (globs, e.g. `worktree-agent-*`, never used to name a commit's branch). A lane's `ref` is its name if that branch exists, else its first existing alias (`branches.py`'s `RENAMED`). A `/cp` `.claude/cp.yml` also loads; it has no parents, so its first branch is the root and the rest are children.
+- **Segments**: `branches.py`'s `segments` ported, generic over lanes. A commit's lane is a root that reaches it, else the deepest lane whose first-parent spine (then own set) has it. Kinds: `run` (with feature merges folded in), `merge` (`from_kind` `parent` or `peer`), `cp` (consecutive picks grouped by source lane; a source outside every lane names a containing branch, `dangling`, or `missing`). `-s` bounds every lane's spine, not just the root's. Picks are the ones on a lane's first-parent spine (as in `branches.py`'s segments); picks arriving via feature merges aren't audited. Deck-specific parts (milestones, deploy pointers, feature-branch table, `[tag]` subject stats) stayed in the deck.
+- **Records**: full SHAs everywhere. `picks[sha]` = the `picks --json` record plus `lane`, `from_lane`, `date`; `merges[sha]` = the `merge --json` record plus `lane`, `from_lane`, `date`, `subject`, `class` (worst file label, with `left-only`/`right-only` counting as `differs`) and `counts` (labels → counts, including equal files). Only parent merges are checked; peer merges have no class. Segment items carry their record's `class`.
+- **Size**: the draft's "normalized per-file patch pairs" made disky's bundle 25MB. Instead, a file carries its `didi` (the outer unified diff of the two `index`-normalized patches) only when its label doesn't explain it: `differs`, `equal@ws`, `equal@tokens`. `equal@lines`/`equal@context`, one-sided, `absorbed` and `adopted` files carry just their label and counts. A didi is capped at 200 lines per file and 2000 per item (`didi_lines` holds the full count), and the output is compact JSON. disky (8 lanes, 572 picks, 566 merges): 4.3MB, 1.0MB gzipped, about 2.5 min from scratch (merges checked 8-way parallel).
+- **Incremental**: `-p` reuses a pick record when its commit and resolved source are unchanged, and a merge record by SHA, if the previous report's `version` and `options` (`-n`/`-U`/`-w`/`-M`/`-C`) match. A rerun with nothing new takes about 12s on disky (segments are always recomputed). A record-format change must bump `REPORT_VERSION`.
+- **Deck switch**: that's a `disky-deep-dive` change; see the spec written there.
 
 [audit]: done/delta-invariance-audit.md
 [gitdag]: https://github.com/Open-Athena/ddd/blob/main/react/GitDag.tsx
