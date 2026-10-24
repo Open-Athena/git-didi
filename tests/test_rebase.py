@@ -51,7 +51,7 @@ def rebase_repo(tmp_path):
     cwd = str(repo)
 
     # Initialize repo with base commit
-    run_git('init', cwd=cwd)
+    run_git('init', '-b', 'main', cwd=cwd)
     run_git('config', 'user.email', 'test@test.com', cwd=cwd)
     run_git('config', 'user.name', 'Test', cwd=cwd)
 
