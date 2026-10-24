@@ -12,7 +12,7 @@ type Comparison = { left: Side, right: Side, options: { normalize: Level }, coun
 
 const LEVELS: Level[] = ['none', 'index', 'lines', 'context', 'ws', 'tokens']
 
-/** `/api/info` answers only under `git-didi serve`; elsewhere (e.g. GH Pages) this resolves to null. */
+/** `/api/info` answers only under `git-didi serve`; elsewhere (e.g. didi.oa.dev) this resolves to null. */
 export function useServeInfo() {
   return useQuery({
     queryKey: ['info'],

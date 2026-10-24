@@ -1,0 +1,9 @@
+# didi.oa.dev: the built viewer (`pnpm build` → dist/) as Workers static assets; no Worker code.
+# `account_id` is omitted: wrangler reads `CLOUDFLARE_ACCOUNT_ID` (OA's; `$oa/.envrc` locally, a secret in CI).
+name = "git-didi"
+compatibility_date = "2026-10-01"
+routes = [{ pattern = "didi.oa.dev", custom_domain = true }]
+
+[assets]
+directory = "dist"
+not_found_handling = "single-page-application"

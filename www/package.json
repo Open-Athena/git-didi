@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc -b",
     "test": "vitest run",
-    "clean": "rm -rf node_modules/.vite dist"
+    "clean": "rm -rf node_modules/.vite dist",
+    "deploy": "pnpm build && wrangler deploy"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.20",
@@ -25,6 +26,7 @@
     "sass": "^1.106.1",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.0.5",
+    "wrangler": "4.151.2"
   }
 }

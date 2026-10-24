@@ -142,13 +142,14 @@ lanes:
 
 #### Web viewer
 
-[`www/`](www) is a static viewer for reports (published at [runsascoded.github.io/git-didi][viewer]): lanes per branch with every merge and cherry-pick drawn by its class (quiet when equal, a halo when equal once normalized, a `≠` badge when it differs), a per-lane audit table, and each pick's or merge's diff of diffs in color (outer and inner gutters, the edit within each patch and the difference between the two highlighted at token level). Load a report with `?r=<CORS-readable URL>` (`&item=<sha>` opens one item), or drop a file on the page.
+[`www/`](www) is a static viewer for reports (published at [didi.oa.dev][viewer]): lanes per branch with every merge and cherry-pick drawn by its class (quiet when equal, a halo when equal once normalized, a `≠` badge when it differs), a per-lane audit table, and each pick's or merge's diff of diffs in color (outer and inner gutters, the edit within each patch and the difference between the two highlighted at token level). Load a report with `?r=<CORS-readable URL>` (`&item=<sha>` opens one item), or drop a file on the page.
 
 `git-didi serve` runs the viewer locally against the current repo, on [localhost:6093](http://localhost:6093): with a `didi.yml` (or `-c`), it builds the repo's report on first view (cached in `$GIT_DIR/didi/report.json`, refreshed incrementally from the viewer), and its Compare view diffs any two ranges (`?left=A..B&right=C..D`, like `git-didi patch`, with every non-equal file's diff of diffs).
 
 ```bash
 git-didi serve -c didi.yml
 cd www && pnpm install && pnpm dev   # viewer dev server (port 6092); proxies /api to a running `git-didi serve`
+cd www && pnpm run deploy            # build and `wrangler deploy` to didi.oa.dev (needs `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID`)
 ```
 
 #### Exit codes
@@ -265,4 +266,4 @@ uv pip install -e .
 MIT License - see [LICENSE] for details.
 
 [LICENSE]: LICENSE
-[viewer]: https://runsascoded.github.io/git-didi
+[viewer]: https://didi.oa.dev
