@@ -1,6 +1,6 @@
 # A web viewer for git-didi: branch lanes, pick/merge audits, diff-of-diffs in color
 
-**Status:** phase 1 (`report`) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phases 2–5 pending. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
+**Status:** phases 1 (`report`) and 2 (`www/` lanes + detail) implemented 2026-10-23 (see [Implementation notes](#implementation-notes)); phases 3–5 pending. Drafted 2026-10-24, from the disky session. Builds on [`done/delta-invariance-audit.md`][audit] (`--json`, `picks`, `merge`/`delta`, normalization levels).
 
 ## Why
 
@@ -100,6 +100,15 @@ git-didi report -c didi.yml -s 2026-09-28 -o report.json
 - **Size**: the draft's "normalized per-file patch pairs" made disky's bundle 25MB. Instead, a file carries its `didi` (the outer unified diff of the two `index`-normalized patches) only when its label doesn't explain it: `differs`, `equal@ws`, `equal@tokens`. `equal@lines`/`equal@context`, one-sided, `absorbed` and `adopted` files carry just their label and counts. A didi is capped at 200 lines per file and 2000 per item (`didi_lines` holds the full count), and the output is compact JSON. disky (8 lanes, 572 picks, 566 merges): 4.3MB, 1.0MB gzipped, about 2.5 min from scratch (merges checked 8-way parallel).
 - **Incremental**: `-p` reuses a pick record when its commit and resolved source are unchanged, and a merge record by SHA, if the previous report's `version` and `options` (`-n`/`-U`/`-w`/`-M`/`-C`) match. A rerun with nothing new takes about 12s on disky (segments are always recomputed). A record-format change must bump `REPORT_VERSION`.
 - **Deck switch**: that's a `disky-deep-dive` change; see the spec written there.
+
+### Phase 2: `www/` (lanes with classes, detail view, GH Pages)
+
+- Vite + React 19 + TS + SASS, port 6092 (hash of the name). `@tanstack/react-query` fetches `?r=`; drag-and-drop or a file picker loads a local report; `?item=<sha>` (via `use-prms`) opens a pick's or merge's detail. LM/DM via CSS tokens (`prefers-color-scheme`, overridable by a header toggle persisted in LS).
+- **Lanes** (`GitDag.tsx`): ported from the deck, minus deck-only marks/glyphs and the pie/badge toggle (picks are always wedges). Links are classed by their worst item. Tones: `quiet` (`equal`/`absorbed`/`adopted`, drawn as in the deck), `soft` (`equal@*`, `missing`: an amber halo), `loud` (`differs`/`files-differ`: a pink halo plus a `≠`/`files` badge). The draft had level badges on every non-equal link, but at disky's ~37px per day they buried the chart; the level is in the hint strip and the drawer instead. Drawer rows carry class chips (with tooltips) and open the item's detail.
+- **Detail** (`Detail.tsx`, `didi.ts`): header (lanes, class, subject, SHAs linked to GitHub, sizes before/after and absorbed picks for merges), the reproducing `git-didi` command with a copy button, and files grouped by label: `differs`/`equal@tokens`/`equal@ws` open with their didi; one-sided, `equal@lines`/`equal@context`, `adopted` and `absorbed` folded; equal files as a count. A didi row has an outer gutter (side) and an inner gutter (sign); background by inner sign, a left rule and gutter colour by outer side; inner line numbers wherever an inner hunk header is inside the window, linked to the blob on GitHub (post-image lines at the side's tip; pre-image lines only where the base is a known SHA, i.e. merges). Token highlights: *inner* (a side's `-` line paired with its following `+` line: the edit) and *outer* (an outer `-` line paired with the outer `+` line of the same inner sign: what differs between sides). The `Treemap.tsx` case shows `, stagedRings = true` as the inner edit on both sides and the parent's `readLogged = allLogged, readUnlogged = [],` as the outer difference. Long lines wrap by default (toggle, persisted).
+- **Audit table**: per lane, picks received and parent merges counted by class, plus the list of loud items (newest first), each opening its detail.
+- **Tests**: vitest for `parseDidi` (gutters, line numbers, both highlight kinds) and `buildDag` (binning, link classes, prelude). Verified in Chrome against disky's report, in both themes.
+- **Pages**: `.github/workflows/pages.yml` builds, tests and deploys `www/` on pushes to `main` touching it. The repo's Pages source must be set to "GitHub Actions" once (`gh api -X POST repos/runsascoded/git-didi/pages -f build_type=workflow`). Not yet in the bundle: a sample report, so the published page opens on its landing form.
 
 [audit]: done/delta-invariance-audit.md
 [gitdag]: https://github.com/Open-Athena/ddd/blob/main/react/GitDag.tsx

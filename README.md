@@ -140,6 +140,14 @@ lanes:
 
 (A `/cp` skill `.claude/cp.yml` also works: its first branch is the root, the rest its children.) The report holds each lane's first-parent history as segments (runs of own commits, merges from its parent or peers, groups of cherry-picks), every pick's `picks` record, and every parent merge's `merge` record (classed by its worst file). Files whose residual isn't explained by their label carry their diff of diffs, so the viewer needs no git. Schema: [`www/schema.json`](www/schema.json).
 
+#### Web viewer
+
+[`www/`](www) is a static viewer for reports (published at [runsascoded.github.io/git-didi][viewer]): lanes per branch with every merge and cherry-pick drawn by its class (quiet when equal, a halo when equal once normalized, a `≠` badge when it differs), a per-lane audit table, and each pick's or merge's diff of diffs in color (outer and inner gutters, the edit within each patch and the difference between the two highlighted at token level). Load a report with `?r=<CORS-readable URL>` (`&item=<sha>` opens one item), or drop a file on the page.
+
+```bash
+cd www && pnpm install && pnpm dev   # http://localhost:6092/?r=/tmp/report.json, for a report in www/public/tmp/
+```
+
 #### Exit codes
 
 `patch`, `stat`, `picks`, `merge`, and `delta` exit 1 when they find differences (at the `-n` level), 2 on errors, 0 otherwise.
@@ -254,3 +262,4 @@ uv pip install -e .
 MIT License - see [LICENSE] for details.
 
 [LICENSE]: LICENSE
+[viewer]: https://runsascoded.github.io/git-didi
